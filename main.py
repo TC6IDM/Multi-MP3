@@ -4,6 +4,8 @@ import subprocess
 import sys
 import logging
 from pathlib import Path
+from datetime import datetime
+from typing import List, Union
 
 SPOTIFY_PREFIX = "https://open.spotify.com/"
 
@@ -29,7 +31,7 @@ def clean_url(line: str) -> str:
     if not line:
         return ""
     # 1) Markdown [text](url) → capture url in ()
-    m = re.match(r".*\((https?://open\.spotify\.com/[^\s)]+)\)", line)
+    m = re.match(r".*\((https?://open\.spotify\.com/[^\s)]+)\)\s*.*", line)
     if m:
         return m.group(1)
     # 2) Already plain spotify URL
@@ -53,13 +55,18 @@ def read_spotify_links(input_path: Path, logger: logging.Logger) -> list[str]:
         logger.info(f"❌ Failed to read links: {e}")
         return []
 
-def run_spotdl_for_link(link: str, output_dir: Path, logger: logging.Logger) -> int:
+def run_spotdl_for_link(link: str, output_dir: Path, logger: logging.Logger) -> tuple[int, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     
+    errors_dir = output_dir / "errors"
+    errors_dir = Path(errors_dir)  # Ensure errors_dir is a Path object
+    errors_dir.mkdir(parents=True, exist_ok=True)
+    errors_file = f"{errors_dir}/errors-{datetime.now().strftime('%Y%m%d%H%M%S')}.txt"
+
     cmd = [
         "spotdl",
         # 🎵 AUDIO FALLBACKS (tries in order until success)
-        "--audio", "youtube-music", "youtube", "soundcloud", "bandcamp", # [{youtube,youtube-music,slider-kz,soundcloud,bandcamp,piped} ...] The audio provider to use. You can provide more than one for fallback.
+        "--audio", "youtube-music", "youtube", "bandcamp", # [{youtube,youtube-music,slider-kz,soundcloud,bandcamp,piped} ...] The audio provider to use. You can provide more than one for fallback.
 
         # 📝 LYRICS FALLBACKS (always tries all, embeds best)
         "--lyrics", "genius", "musixmatch", "azlyrics", "synced", #[{genius,musixmatch,azlyrics,synced} ...] The lyrics provider to use. You can provide more than one for fallback. Synced lyrics might not work correctly with some music players. For such cases it's better to use `--generate-lrc` option.
@@ -70,7 +77,7 @@ def run_spotdl_for_link(link: str, output_dir: Path, logger: logging.Logger) -> 
         "--threads", "4", #The number of threads to use when downloading songs.
         "--overwrite", "skip", #{skip,metadata,force} How to handle existing/duplicate files. (When combined with --scan-for-songs force will remove all duplicates, and metadata will only apply metadata to the latest song and will remove the rest. )
         "--print-errors", #Print errors (wrong songs, failed downloads etc) on exit, useful for long playlist
-        "--save-errors", "errors.txt", #Save errors (wrong songs, failed downloads etc) to a file
+        "--save-errors", str(errors_file), # Save errors (wrong songs, failed downloads etc) to a file
         "--max-retries", "10", #The maximum number of retries to perform when getting metadata.
         "--preload", #Preload the download url to speed up the download process.
         "--scan-for-songs", #Scan the output directory for existing files. This option should be combined with the --overwrite option to control how existing files are handled. (Output directory is the last directory that is not a template variable in the output template)
@@ -80,7 +87,7 @@ def run_spotdl_for_link(link: str, output_dir: Path, logger: logging.Logger) -> 
         "--output", "{list-name}/{list-position} {title} - {artists}.{output-ext}", #Specify the downloaded file name format, available variables: {title}, {artists}, {artist}, {album}, {album-artist}, {genre}, {disc-number}, {disc-count}, {duration}, {year}, {original-date}, {track-number}, {tracks-count}, {isrc}, {track-id}, {publisher}, {list-length}, {list-position}, {list-name}, {output-ext}
         
         #🐛 Debugging
-        "--log-level", "DEBUG",
+        "--log-level", "DEBUG",  #{CRITICAL,FATAL,ERROR,WARN,WARNING,INFO,MATCH,DEBUG,NOTSET} Select log level.
 
         #other
         # "--genius-access-token", "GENIUS_TOKEN", #Lets you choose your own Genius access token.
@@ -138,7 +145,6 @@ def run_spotdl_for_link(link: str, output_dir: Path, logger: logging.Logger) -> 
         # "--cert-file", "CERT_FILE", #File Path to the TLS Certificate (PEM format).
         # "--key-file", "KEY_FILE", #File Path to the TLS Private Key (PEM format).
         # "--ca-file", "CA_FILE", #File Path to the TLS Certificate Authority File (PEM format).
-        # "--log-level", "{CRITICAL,FATAL,ERROR,WARN,WARNING,INFO,MATCH,DEBUG,NOTSET}", #{CRITICAL,FATAL,ERROR,WARN,WARNING,INFO,MATCH,DEBUG,NOTSET} Select log level.
         # "--simple-tui", #Use a simple tui.
         # "--log-format", "LOG_FORMAT", #Custom logging format to use. More info: https://docs.python.org/3/library/logging.html#logrecord-attributes
         # "--download-ffmpeg", #Download ffmpeg to spotdl directory.
@@ -162,13 +168,13 @@ def run_spotdl_for_link(link: str, output_dir: Path, logger: logging.Logger) -> 
             logger.info(f"✅ Playlist complete: {output_dir}")
         else:
             logger.info(f"⚠️  Playlist finished with code {proc.returncode}")
-        return proc.returncode
+        return proc.returncode, Path(errors_file)
     except subprocess.TimeoutExpired:
         logger.info("⏰ Download timed out after 1 hour")
-        return 1
+        return 1, Path(errors_file)
     except Exception as e:
         logger.info(f"💥 SpotDL error: {e}")
-        return 1
+        return 1, Path(errors_file)
 
 def main():
     if len(sys.argv) < 3:
@@ -195,10 +201,18 @@ def main():
     for i, link in enumerate(links, 1):
         logger.info(f"\n{'='*60}")
         logger.info(f"[{i}/{len(links)}] Processing playlist...")
-        code = run_spotdl_for_link(link, output_dir, logger)
+        code, errors_file = run_spotdl_for_link(link, output_dir, logger)
         if code != 0:
             exit_code = code
             logger.info(f"Playlist {i} failed (code {code})")
+        
+        logger.info(errors_file)
+
+        if errors_file.is_file():
+            with errors_file.open("r", encoding="utf-8") as ef:
+                logger.info("🔍 Errors found in playlist:")
+                for line in ef:
+                    logger.info(f"   {line.strip()}")
 
     logger.info(f"\n🎉 Complete! Final exit code: {exit_code}")
     logger.info(f"📁 Files in: {output_dir}")
