@@ -92,7 +92,8 @@ def run_spotdl_for_link(link: str, output_dir: Path, logger: logging.Logger) -> 
         "--lyrics", "genius", #[{genius,musixmatch,azlyrics,synced} ...] The lyrics provider to use. You can provide more than one for fallback. Synced lyrics might not work correctly with some music players. For such cases it's better to use `--generate-lrc` option.
 
         # 🎛️ Core settings
-        "--bitrate", "320k", #{auto,disable,8k,16k,24k,32k,40k,48k,64k,80k,96k,112k,128k,160k,192k,224k,256k,320k,0,1,2,3,4,5,6,7,8,9} The constant/variable bitrate to use for the output file. Values from 0 to 9 are variable bitrates. Auto will use the bitrate of the original file. Disable will disable the bitrate option. (In case of m4a and opus files, auto and disable will skip the conversion)
+        #lower bitrate to reduce file size
+        "--bitrate", "256k", #{auto,disable,8k,16k,24k,32k,40k,48k,64k,80k,96k,112k,128k,160k,192k,224k,256k,320k,0,1,2,3,4,5,6,7,8,9} The constant/variable bitrate to use for the output file. Values from 0 to 9 are variable bitrates. Auto will use the bitrate of the original file. Disable will disable the bitrate option. (In case of m4a and opus files, auto and disable will skip the conversion)
         "--format", "mp3", #{mp3,flac,ogg,opus,m4a,wav} The format to download the song in.
         "--threads", "4", #The number of threads to use when downloading songs.
         "--overwrite", "skip", #{skip,metadata,force} How to handle existing/duplicate files. (When combined with --scan-for-songs force will remove all duplicates, and metadata will only apply metadata to the latest song and will remove the rest. )
