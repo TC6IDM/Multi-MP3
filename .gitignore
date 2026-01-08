@@ -1,2 +1,5 @@
 downloads/
 .env
+/.spotdl/*
+!/.spotdl/config.json
+examplecmd.py
