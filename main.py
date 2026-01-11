@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import subprocess
@@ -7,6 +8,10 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Union
 from dotenv import load_dotenv
+from spotipy.oauth2 import SpotifyClientCredentials
+from spotdl.utils import spotify
+import urllib.request
+
 
 SPOTIFY_PREFIX = "https://open.spotify.com/"
 
@@ -16,6 +21,8 @@ load_dotenv()
 # Access CLIENTID and CLIENTSECRET from environment variables
 CLIENT_ID = os.getenv("CLIENTID")
 CLIENT_SECRET = os.getenv("CLIENTSECRET")
+os.environ['SPOTIFY_CLIENT_ID'] = CLIENT_ID or ''
+os.environ['SPOTIFY_CLIENT_SECRET'] = CLIENT_SECRET or ''
 
 class Playlist:
     name: str
@@ -37,7 +44,7 @@ class Song:
     playlist: Playlist
     list_position: str
 
-    def __init__(self, spotify_url: str, playlist_url: str, error: str, title: str = "", artists: List[str] = [], playlist: Playlist = None, list_position: str = ""):
+    def __init__(self, spotify_url: str, playlist_url: str = None, error: str = "", title: str = "", artists: List[str] = [], playlist: Playlist = None, list_position: str = ""):
         self.title = title
         self.artists = artists
         self.spotify_url = spotify_url
@@ -46,6 +53,59 @@ class Song:
         if playlist == None: self.playlist = Playlist(playlist_url)
         else: self.playlist = playlist
         self.list_position = list_position
+
+def getImage(url: str, output_dir: Path, logger: logging.Logger):  # Add output_dir param
+    client_credentials_manager = SpotifyClientCredentials(
+        client_id=CLIENT_ID, 
+        client_secret=CLIENT_SECRET
+    )
+    session = spotify.Spotify(client_credentials_manager=client_credentials_manager)
+    
+    # Dynamic .icons folder inside output_dir (e.g. /app/music/.icons)
+    icons_dir = output_dir / ".icons"
+    icons_dir.mkdir(parents=True, exist_ok=True)
+    
+    
+    if "album" in url: 
+        out = session.album(url)
+        type = "album"
+    elif "playlist" in url: 
+        out = session.playlist(url)
+        type = "playlist"
+    elif "artist" in url: 
+        out = session.artist(url)
+        type = "artist"
+    elif "track" in url:
+        out = session.track(url)
+        type = "track"
+    else:
+        logger.info(f"❌ Unknown type: {type}")
+        return None
+    
+    metadata_dir = output_dir / ".metadata"
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    # Save FULL metadata as JSON
+    safe_name = "".join(c for c in out['name'] if c.isalnum() or c in (' ', '-', '_')).rstrip()
+    json_path = metadata_dir / f"{safe_name}.json"
+    
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(out, f, indent=2, ensure_ascii=False)
+    
+    logger.info(f"📄 Metadata JSON saved: {json_path}")
+    
+    try:
+        # Sanitize filename (no invalid chars)
+        safe_name = "".join(c for c in out['name'] if c.isalnum() or c in (' ', '-', '_')).rstrip()
+        image_path = icons_dir / f"{safe_name}.jpg"
+        
+        logger.info(f"🖼️  Downloading: {out['images'][0]['url']} → {image_path}")
+        urllib.request.urlretrieve(out['images'][0]["url"], image_path)
+        logger.info(f"✅ Saved: {image_path}")
+        
+    except Exception as e:
+        logger.info(f"❌ Image failed: {e}")
+    
+    return out['name']
 
 def setup_logging(output_dir: Path):
     """Setup logging to console + file"""
@@ -142,24 +202,25 @@ def parse_errors(errors_file: Path, logger: logging.Logger, playlist_url: str) -
                 if not line or not line.startswith('https://open.spotify.com/track/'):
                     continue
                 
+                #    def __init__(self, spotify_url: str, playlist_url: str = None, error: str = "", title: str = "", artists: List[str] = [], playlist: Playlist = None, list_position: str = ""):
                 #https://open.spotify.com/track/6bFeIzkzsU45auYW1UUa47 - LookupError: No results found for song: NOTION - Dreams
                 if ' - LookupError: No results found for song:' in line:
                     song_link = line.split(' - LookupError: No results found for song:', 1)[0]
                     artists = line.split(' - LookupError: No results found for song:', 1)[1].split(' - ')[0]
                     title = line.split(' - LookupError: No results found for song:', 1)[1].split(' - ')[1]
-                    failed_songs.append(Song(title.strip(), [a.strip() for a in artists.split(',')], song_link.strip(), playlist_url, "LookupError: No results found"))
+                    failed_songs.append(Song(spotify_url=song_link.strip(), playlist_url=playlist_url, error = "LookupError: No results found", title=title.strip(), artists=[a.strip() for a in artists.split(',')]))
                     continue
                 
                 #https://open.spotify.com/track/2ZXsTQ8d1c75zMEJH0uj1R - KeyError: 'webCommandMetadata'
                 if " - KeyError: 'webCommandMetadata'" in line:
                     song_link = line.split(' - KeyError:', 1)[0]
-                    failed_songs.append(Song("Unknown Title", ["Unknown Artist"], song_link.strip(), playlist_url, f"KeyError: 'webCommandMetadata'"))
+                    failed_songs.append(Song(spotify_url=song_link.strip(), playlist_url=playlist_url, error = f"KeyError: 'webCommandMetadata'"))
                     continue
 
                 #https://open.spotify.com/track/0PBQS0GycsYJ4yJJRjAIXU - AudioProviderError: YT-DLP download error - https://music.youtube.com/watch?v=ceXJTfuie6k
                 if " - AudioProviderError: YT-DLP download error - " in line:
                     song_link = line.split(' - AudioProviderError: YT-DLP download error - ', 1)[0]
-                    failed_songs.append(Song("Unknown Title", ["Unknown Artist"], song_link.strip(), playlist_url, "AudioProviderError: YT-DLP download error"))
+                    failed_songs.append(Song(spotify_url=song_link.strip(), playlist_url=playlist_url, error = "AudioProviderError: YT-DLP download error"))
                     continue
     
     except Exception as e:
@@ -177,6 +238,10 @@ def main():
     
     logger = setup_logging(output_dir)
     
+
+    logger.info(f"🔑 Exported SPOTIFY_CLIENT_ID: {CLIENT_ID[:8]}...")
+    logger.info(f"🔑 Exported SPOTIFY_CLIENT_SECRET: {CLIENT_SECRET[:8]}...")
+
     if not input_file.is_file():
         logger.info(f"❌ Input file not found: {input_file}")
         sys.exit(1)
@@ -191,7 +256,8 @@ def main():
     exit_code = 0
     for i, link in enumerate(links, 1):
         logger.info(f"\n{'='*60}")
-        logger.info(f"[{i}/{len(links)}] Processing playlist...")
+        name = getImage(link, output_dir, logger)
+        logger.info(f"[{i}/{len(links)}] Processing playlist... {name}")
         code, errors_file = run_spotdl_for_link(link, output_dir, logger)
         if code != 0:
             exit_code = code

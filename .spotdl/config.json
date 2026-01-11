@@ -1,6 +1,4 @@
 {
-    "client_id": "",
-    "client_secret": "",
     "auth_token": null,
     "user_auth": false,
     "headless": false,

@@ -3,3 +3,5 @@ downloads/
 /.spotdl/*
 !/.spotdl/config.json
 examplecmd.py
+.venv
+.vscode
