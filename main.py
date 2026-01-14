@@ -26,7 +26,7 @@ os.environ['SPOTIFY_CLIENT_SECRET'] = CLIENT_SECRET or ''
 
 class Playlist:
     name: str
-    playlist_urlplaylist_url: str
+    playlist_url: str
     length: int
     songs: List['Song']
     def __init__(self, playlist_url: str, name: str = "", length: int = 0, songs: List['Song'] = []):
