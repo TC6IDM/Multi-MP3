@@ -521,7 +521,7 @@ def run_scdl_for_link(link: str, output_dir: Path, logger: logging.Logger) -> tu
         "--original-art",  # Download original cover art, not just 500x500 JPEG
         "-c",  # Continue if a downloaded file already exists
         "--debug",  # Set log level to DEBUG
-        '--yt-dlp-args', '--write-info-json --ignore-errors --no-abort-on-error',  # Pass additional arguments to yt-dlp
+        '--yt-dlp-args', '--write-info-json --ignore-errors --no-abort-on-error --yes-playlist --embed-thumbnail --audio-quality 1',  # Pass additional arguments to yt-dlp
     ]
     
     logger.info(f"🔊 scdl Downloading: {link.split('?')[0]}")
