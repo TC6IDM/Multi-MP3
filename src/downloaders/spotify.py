@@ -25,7 +25,7 @@ class SpotifyDownloader(BaseDownloader):
 
     def download(self, link: str) -> Tuple[int, Path]:
         """Implement BaseDownloader.download: run spotdl."""
-        errors_file = self.errors_dir / f"errors-{datetime.now().strftime('%Y%m%d%H%M%S')}.txt"
+        errors_file = self.errors_dir / f"errors-spotdl-{datetime.now().strftime('%Y%m%d%H%M%S')}.txt"
         
         output_template = self._use_correct_config(link)
 
@@ -39,25 +39,27 @@ class SpotifyDownloader(BaseDownloader):
             "download",
             link,
         ]
+        name = "SpotDL"
+        return self._download(name, link, cmd, _errors_file=errors_file)
+
+        # self.logger.info(f"🎵 spotdl: {link.split('?')[0]}")
+        # self.logger.debug(f"Command: {' '.join(cmd)}")
         
-        self.logger.info(f"🎵 spotdl: {link.split('?')[0]}")
-        self.logger.debug(f"Command: {' '.join(cmd)}")
-        
-        env = os.environ.copy()
-        try:
-            proc = subprocess.run(cmd, env=env, cwd=str(self.output_dir),
-                                capture_output=False, text=True, timeout=3600)
-            if proc.returncode == 0:
-                self.logger.info("✅ spotdl complete")
-            else:
-                self.logger.warning(f"spotdl exit code: {proc.returncode}")
-            return proc.returncode, errors_file
-        except subprocess.TimeoutExpired:
-            self.logger.warning("⏰ spotdl timeout (1h)")
-            return 1, errors_file
-        except Exception as e:
-            self.logger.error(f"💥 spotdl error: {e}")
-            return 1, errors_file
+        # env = os.environ.copy()
+        # try:
+        #     proc = subprocess.run(cmd, env=env, cwd=str(self.output_dir), 
+        #                           capture_output=False, text=True, timeout=3600)
+        #     if proc.returncode == 0:
+        #         self.logger.info("✅ spotdl complete")
+        #     else:
+        #         self.logger.warning(f"spotdl exit code: {proc.returncode}")
+        #     return proc.returncode, errors_file
+        # except subprocess.TimeoutExpired:
+        #     self.logger.warning("⏰ spotdl timeout (1h)")
+        #     return 1, errors_file
+        # except Exception as e:
+        #     self.logger.error(f"💥 spotdl error: {e}")
+        #     return 1, errors_file
 
     def cleanup(self, playlist_name: str) -> List[Song]:
         """Scan for missing tracks using metadata (your check_missing_tracks logic)."""
@@ -161,21 +163,22 @@ class SpotifyDownloader(BaseDownloader):
             return []
         
         # Scan files for numbers/padding
-        numbers = []
-        padding = 0
-        for p in playlist_dir.iterdir():
-            if p.suffix.lower() in ('.mp3', '.flac', '.m4a'):
-                match = re.match(r'^\s*(\d+)', p.stem)
-                if match:
-                    num = int(match.group(1))
-                    numbers.append(num)
-                    padding = max(padding, len(match.group(1)))
+        numbers, padding = self._get_padding(playlist_dir)
+        # numbers = []
+        # padding = 0
+        # for p in playlist_dir.iterdir():
+        #     if p.suffix.lower() in ('.mp3', '.flac', '.m4a'):
+        #         match = re.match(r'^\s*(\d+)', p.stem)
+        #         if match:
+        #             num = int(match.group(1))
+        #             numbers.append(num)
+        #             padding = max(padding, len(match.group(1)))
         
-        if not numbers:
-            self.logger.info(f"ℹ️ No numbered files in: {playlist_name}")
-            return []
+        # if not numbers:
+        #     self.logger.info(f"ℹ️ No numbered files in: {playlist_name}")
+        #     return []
     
-        numbers.sort()
+        # numbers.sort()
         missing_nums = [n for n in range(1, expected_count + 1) if n not in numbers]
         if not missing_nums:
             self.logger.info(f"✅ All {expected_count} tracks present in: {playlist_name}")

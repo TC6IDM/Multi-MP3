@@ -14,7 +14,7 @@ from src.models import Song, Playlist
 class SoundCloudDownloader(BaseDownloader):
     def download(self, link: str) -> Tuple[int, Path]:
         """Download SoundCloud link via scdl CLI."""
-        errors_file = self.errors_dir / f"scdl-{datetime.now().strftime('%Y%m%d%H%M%S')}.txt"
+        # errors_file = self.errors_dir / f"scdl-{datetime.now().strftime('%Y%m%d%H%M%S')}.txt"
         
         cmd = [
             "scdl",
@@ -28,30 +28,31 @@ class SoundCloudDownloader(BaseDownloader):
             "--debug",
             "--yt-dlp-args", "--write-info-json --ignore-errors --no-abort-on-error --yes-playlist --embed-thumbnail --audio-quality 1",
         ]
+
+        name = "scdl"
+        return self._download(name, link, cmd)
+
+        # self.logger.info(f"🔊 scdl: {link.split('?')[0]}")
+        # self.logger.debug(f"📁 Output: {self.output_dir}")
+        # self.logger.debug(f"Command: {' '.join(cmd)}")
         
-        self.logger.info(f"🔊 scdl: {link.split('?')[0]}")
-        self.logger.debug(f"📁 Output: {self.output_dir}")
-        self.logger.debug(f"Command: {' '.join(cmd)}")
-        
-        env = os.environ.copy()
-        try:
-            proc = subprocess.run(
-                cmd, env=env, cwd=str(self.output_dir),
-                capture_output=False, text=True, timeout=3600
-            )
-            if proc.returncode == 0:
-                if proc.stdout:
-                    errors_file.write_text(proc.stdout)
-                self.logger.info("✅ scdl complete")
-            else:
-                self.logger.warning(f"scdl exit code: {proc.returncode}")
-            return proc.returncode, errors_file
-        except subprocess.TimeoutExpired:
-            self.logger.warning("⏰ scdl timeout (1h)")
-            return 1, errors_file
-        except Exception as e:
-            self.logger.error(f"💥 scdl error: {e}")
-            return 1, errors_file
+        # env = os.environ.copy()
+        # try:
+        #     proc = subprocess.run(cmd, env=env, cwd=str(self.output_dir),
+        #         capture_output=False, text=True, timeout=3600)
+        #     if proc.returncode == 0:
+        #         if proc.stdout:
+        #             errors_file.write_text(proc.stdout)
+        #         self.logger.info("✅ scdl complete")
+        #     else:
+        #         self.logger.warning(f"scdl exit code: {proc.returncode}")
+        #     return proc.returncode, errors_file
+        # except subprocess.TimeoutExpired:
+        #     self.logger.warning("⏰ scdl timeout (1h)")
+        #     return 1, errors_file
+        # except Exception as e:
+        #     self.logger.error(f"💥 scdl error: {e}")
+        #     return 1, errors_file
 
     def cleanup(self, playlist_name: str) -> List[Song]:
         """Cleanup metadata/scan missing tracks across playlists."""
@@ -97,16 +98,18 @@ class SoundCloudDownloader(BaseDownloader):
         self.logger.info(f"{playlist_name}: {expected_count} expected")
         
         # Scan MP3s for numbers/padding
-        numbers = []
-        padding = 0
-        for p in playlist_dir.iterdir():
-            if p.suffix.lower() == '.mp3':
-                match = re.match(r'(\d+)', p.stem)
-                if match:
-                    num_str = match.group(1)
-                    numbers.append(int(num_str))
-                    padding = max(padding, len(num_str))
-        numbers.sort()
+        numbers, padding = self._get_padding(playlist_dir)
+
+        # numbers = []
+        # padding = 0
+        # for p in playlist_dir.iterdir():
+        #     if p.suffix.lower() == '.mp3':
+        #         match = re.match(r'(\d+)', p.stem)
+        #         if match:
+        #             num_str = match.group(1)
+        #             numbers.append(int(num_str))
+        #             padding = max(padding, len(num_str))
+        # numbers.sort()
         missing_numbers = [n for n in range(1, expected_count + 1) if n not in numbers]
         
         missing_songs: List[Song] = []
