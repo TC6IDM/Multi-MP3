@@ -23,3 +23,4 @@
 #https://open.spotify.com/artist/6mmSS7itNWKbapgG2eZbIg?si=5180684731a940bf Knock2
 #https://open.spotify.com/track/6QWqy98sVOhrj00laLuhGb?si=0531f067c9b648de pressure
 #https://open.spotify.com/album/3mH6qwIy9crq0I9YQbOuDf?si=Y14z-3ROQgGFGwfmH5V8Jg blonde
+https://open.spotify.com/playlist/0SeWUhJeF037ZDWZeBxEZl?si=3304a92f7be143cb Speed Garage

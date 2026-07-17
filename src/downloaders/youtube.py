@@ -14,7 +14,7 @@ from src.models import Song, Playlist
 class YouTubeDownloader(BaseDownloader):
     def download(self, link: str) -> Tuple[int, Path]:
         """Download YouTube playlist/channel via yt-dlp."""
-        errors_file = self.errors_dir / f"ytdlp-{datetime.now().strftime('%Y%m%d%H%M%S')}.txt"
+        # errors_file = self.errors_dir / f"ytdlp-{datetime.now().strftime('%Y%m%d%H%M%S')}.txt"
         
         cmd = [
             "yt-dlp",
@@ -31,27 +31,29 @@ class YouTubeDownloader(BaseDownloader):
             link,
         ]
         
-        self.logger.info(f"📺 yt-dlp: {link.split('?')[0]}")
-        self.logger.info(f"📁 → {self.output_dir}")
-        self.logger.debug(f"Command: {' '.join(cmd)}")
+        name = "yt-dlp"
+        return self._download(name, link, cmd)
+        # self.logger.info(f"📺 yt-dlp: {link.split('?')[0]}")
+        # self.logger.info(f"📁 → {self.output_dir}")
+        # self.logger.debug(f"Command: {' '.join(cmd)}")
         
-        env = os.environ.copy()
-        try:
-            proc = subprocess.run(cmd, env=env, cwd=str(self.output_dir),
-                                capture_output=False, text=True, timeout=3600*2)
-            if proc.returncode == 0:
-                if proc.stdout:
-                    errors_file.write_text(proc.stdout)
-                self.logger.info("✅ yt-dlp complete")
-            else:
-                self.logger.warning(f"yt-dlp exit: {proc.returncode}")
-            return proc.returncode, errors_file
-        except subprocess.TimeoutExpired:
-            self.logger.error("⏰ yt-dlp timeout (2h)")
-            return 1, errors_file
-        except Exception as e:
-            self.logger.error(f"💥 yt-dlp: {e}")
-            return 1, errors_file
+        # env = os.environ.copy()
+        # try:
+        #     proc = subprocess.run(cmd, env=env, cwd=str(self.output_dir),
+        #                         capture_output=False, text=True, timeout=3600*2)
+        #     if proc.returncode == 0:
+        #         if proc.stdout:
+        #             errors_file.write_text(proc.stdout)
+        #         self.logger.info("✅ yt-dlp complete")
+        #     else:
+        #         self.logger.warning(f"yt-dlp exit: {proc.returncode}")
+        #     return proc.returncode, errors_file
+        # except subprocess.TimeoutExpired:
+        #     self.logger.error("⏰ yt-dlp timeout (2h)")
+        #     return 1, errors_file
+        # except Exception as e:
+        #     self.logger.error(f"💥 yt-dlp: {e}")
+        #     return 1, errors_file
 
     def cleanup(self, playlist_name: str) -> List[Song]:
         """Cleanup metadata/scan missing tracks across playlists."""
@@ -92,16 +94,17 @@ class YouTubeDownloader(BaseDownloader):
         self.logger.info(f"📊 {playlist_name}: {expected_count} expected")
         
         # Scan MP3s for numbers/padding
-        numbers = []
-        padding = 0
-        for p in playlist_dir.iterdir():
-            if p.is_file() and p.suffix.lower() == '.mp3':
-                match = re.match(r'^\s*(\d+)', p.stem)
-                if match:
-                    num_str = match.group(1)
-                    numbers.append(int(num_str))
-                    padding = max(padding, len(num_str))
-        numbers.sort()
+        numbers, padding = self._get_padding(playlist_dir)
+        # numbers = []
+        # padding = 0
+        # for p in playlist_dir.iterdir():
+        #     if p.is_file() and p.suffix.lower() == '.mp3':
+        #         match = re.match(r'^\s*(\d+)', p.stem)
+        #         if match:
+        #             num_str = match.group(1)
+        #             numbers.append(int(num_str))
+        #             padding = max(padding, len(num_str))
+        # numbers.sort()
         missing_numbers = [n for n in range(1, expected_count + 1) if n not in numbers]
         
         missing_songs: List[Song] = []

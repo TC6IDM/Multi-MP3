@@ -1,0 +1,6 @@
+Flask>=2.0
+python-dotenv
+spotipy
+spotdl
+yt-dlp
+# Note: container installs ffmpeg system package as well. Add any other deps if your project requires them.

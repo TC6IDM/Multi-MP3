@@ -1,0 +1,16 @@
+# Exclude downloads and other large or local files from the build context
+downloads/
+*.mp3
+*.flac
+*.m4a
+.spotdl/
+.env
+__pycache__/
+*.pyc
+.vscode/
+.git/
+*.egg-info/
+venv/
+env/
+node_modules/
+.DS_Store
