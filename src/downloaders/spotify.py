@@ -29,11 +29,20 @@ class SpotifyDownloader(BaseDownloader):
         
         output_template = self._use_correct_config(link)
 
+        threads = os.getenv("SPOTDL_THREADS", "4")
+        try:
+            threads = str(max(1, int(threads)))
+        except ValueError:
+            threads = "4"
+
+        self.logger.info(f"🧵 Using spotdl threads: {threads}")
+
         cmd = [
             "spotdl",
             "--save-errors", str(errors_file),
             "--client-id", self.client_credentials_manager.client_id,
             "--client-secret", self.client_credentials_manager.client_secret,
+            "--threads", threads,
             "--output", output_template,
             # "--yt-dlp-args", "--write-info-json --write-playlist-metafiles --no-abort-on-error --ignore-errors",
             "download",

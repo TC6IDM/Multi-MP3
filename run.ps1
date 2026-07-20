@@ -81,9 +81,10 @@ if ($existing.Count -gt 0) {
 }
 
 if ($Detach) {
-    Write-Host "Running container (detached). Open http://localhost:5000"
+    Write-Host "Running container (detached). Open http://127.0.0.1:5000"
     iex "docker run --rm -d $port $volArg $ImageName"
 } else {
     Write-Host "Running container (foreground). Press Ctrl+C to stop."
+    Write-Host "Browse to http://127.0.0.1:5000"
     iex "docker run --rm $port $volArg $ImageName"
 }
