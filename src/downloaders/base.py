@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from logging import Logger
 from pathlib import Path
@@ -34,7 +35,7 @@ class BaseDownloader(ABC):
     
     def _download(self, name: str, link: str, cmd: List[str], _errors_file: Path | None = None) -> Tuple[int, Path]:
 
-        errors_file = self.errors_dir / f"errors-{name}-{datetime.now().strftime('%Y%m%d%H%M%S')}.txt" if not _errors_file else _errors_file
+        errors_file = self.errors_dir / f"errors-{name}-{datetime.now().strftime('%Y%m%d%H%M%S%f')}.txt" if not _errors_file else _errors_file
 
         self.logger.info(f"🎵 {name}: {link.split('?')[0]}")
         self.logger.info(f"📁 → {self.output_dir}")
@@ -116,17 +117,27 @@ class BaseDownloader(ABC):
 
         return numbers, padding
 
-    def _cleanup_all_playlists(self) -> List[Song]:
-        """Iterate all playlist dirs and run per-playlist cleanup. Used by YouTube and SoundCloud."""
+    def _cleanup_all_playlists(self, max_workers: int = 4) -> List[Song]:
+        """Iterate all playlist dirs and run per-playlist cleanup in parallel."""
         metadata_root = self.output_dir / ".metadata"
         metadata_root.mkdir(exist_ok=True)
-        all_missing: List[Song] = []
 
-        for playlist_dir in self.output_dir.iterdir():
-            if not playlist_dir.is_dir() or playlist_dir.name.startswith('.'):
-                continue
-            missing = self._cleanup_playlist(playlist_dir, metadata_root)
-            all_missing.extend(missing)
+        playlist_dirs = [d for d in self.output_dir.iterdir()
+                         if d.is_dir() and not d.name.startswith('.')]
+        if not playlist_dirs:
+            return []
+
+        all_missing: List[Song] = []
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(playlist_dirs))) as executor:
+            futures = {
+                executor.submit(self._cleanup_playlist, d, metadata_root): d.name
+                for d in playlist_dirs
+            }
+            for future in as_completed(futures):
+                try:
+                    all_missing.extend(future.result())
+                except Exception as e:
+                    self.logger.error(f"💥 Cleanup failed for {futures[future]}: {e}")
 
         self.logger.info(f"🧹 Done! {len(all_missing)} total missing")
         return all_missing

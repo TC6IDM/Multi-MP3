@@ -23,7 +23,7 @@ class SpotifyDownloader(BaseDownloader):
 
     def download(self, link: str) -> Tuple[int, Path]:
         """Implement BaseDownloader.download: run spotdl."""
-        errors_file = self.errors_dir / f"errors-spotdl-{datetime.now().strftime('%Y%m%d%H%M%S')}.txt"
+        errors_file = self.errors_dir / f"errors-spotdl-{datetime.now().strftime('%Y%m%d%H%M%S%f')}.txt"
         
         output_template = self._use_correct_config(link)
 

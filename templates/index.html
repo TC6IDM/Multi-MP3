@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multi-MP3</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>🎵 Multi-MP3</h1>
+  <span id="status-indicator" class="status-idle">● Idle</span>
+</header>
+
+<nav id="tabs">
+  <button class="tab active" data-tab="dashboard">Dashboard</button>
+  <button class="tab" data-tab="live">Live</button>
+  <button class="tab" data-tab="library">Library</button>
+  <button class="tab" data-tab="history">History</button>
+</nav>
+
+<!-- ── Dashboard Tab ── -->
+<section id="tab-dashboard" class="tab-content active">
+  <div class="panel">
+    <h2>Links</h2>
+    <textarea id="links-input" rows="10" placeholder="Paste links here (one per line)&#10;Supports Spotify, YouTube, and SoundCloud URLs&#10;Markdown [name](url) also works"></textarea>
+    <div class="controls">
+      <label><input type="checkbox" id="provider-soundcloud" checked> SoundCloud</label>
+      <label><input type="checkbox" id="provider-youtube" checked> YouTube</label>
+      <label><input type="checkbox" id="provider-spotify" checked> Spotify</label>
+      <label><input type="checkbox" id="parallel-toggle" checked> Parallel</label>
+      <button id="btn-start" onclick="startJob()">▶ Start Download</button>
+    </div>
+    <div id="parse-preview" class="muted"></div>
+  </div>
+</section>
+
+<!-- ── Live Tab ── -->
+<section id="tab-live" class="tab-content">
+  <div class="panel">
+    <h2>Progress</h2>
+    <div id="progress-bars"></div>
+    <div class="controls">
+      <button id="btn-cancel" onclick="cancelJob()" disabled>⏹ Cancel</button>
+    </div>
+  </div>
+  <div class="panel log-panel">
+    <h2>Log</h2>
+    <pre id="log-output"></pre>
+  </div>
+</section>
+
+<!-- ── Library Tab ── -->
+<section id="tab-library" class="tab-content">
+  <div class="panel">
+    <h2>Downloaded Playlists</h2>
+    <div id="file-list">Loading...</div>
+  </div>
+</section>
+
+<!-- ── History Tab ── -->
+<section id="tab-history" class="tab-content">
+  <div class="panel">
+    <h2>Run History</h2>
+    <div id="history-list">Loading...</div>
+  </div>
+</section>
+
+<script>
+// ── Tab Switching ──
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'library') loadFiles();
+    if (btn.dataset.tab === 'history') loadHistory();
+  });
+});
+
+// ── Load links ──
+async function loadLinks() {
+  const r = await fetch('/api/links');
+  const d = await r.json();
+  document.getElementById('links-input').value = d.text;
+  if (d.parsed.total > 0) {
+    document.getElementById('parse-preview').innerHTML =
+      `Parsed: ${d.parsed.total} links (📀 ${d.parsed.spotify} 🔊 ${d.parsed.soundcloud} 📺 ${d.parsed.youtube})`;
+  }
+}
+
+// ── Start job ──
+async function startJob() {
+  const links = document.getElementById('links-input').value;
+  const providers = [];
+  if (document.getElementById('provider-soundcloud').checked) providers.push('soundcloud');
+  if (document.getElementById('provider-youtube').checked) providers.push('youtube');
+  if (document.getElementById('provider-spotify').checked) providers.push('spotify');
+  const parallel = document.getElementById('parallel-toggle').checked;
+
+  // Save links first
+  await fetch('/api/links', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({text: links}) });
+
+  const r = await fetch('/api/jobs', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({links, providers, parallel})
+  });
+  if (!r.ok) { alert((await r.json()).detail); return; }
+
+  const {job_id} = await r.json();
+  document.getElementById('btn-start').disabled = true;
+  document.getElementById('btn-cancel').disabled = false;
+  document.getElementById('status-indicator').textContent = '● Running';
+  document.getElementById('status-indicator').className = 'status-running';
+
+  // Switch to Live tab
+  document.querySelector('.tab[data-tab="live"]').click();
+  streamEvents(job_id);
+}
+
+// ── Cancel job ──
+async function cancelJob() {
+  const r = await fetch('/api/status');
+  const s = await r.json();
+  if (s.current_job_id) {
+    await fetch('/api/jobs/' + s.current_job_id, {method:'DELETE'});
+  }
+}
+
+// ── SSE event stream ──
+function streamEvents(jobId) {
+  const logEl = document.getElementById('log-output');
+  const progressEl = document.getElementById('progress-bars');
+  const bars = {};
+  logEl.textContent = '';
+
+  const es = new EventSource('/api/jobs/' + jobId + '/events');
+  es.addEventListener('message', e => {
+    const d = JSON.parse(e.data);
+    if (d.type === 'ping') return;
+
+    if (d.type === 'log') {
+      logEl.textContent += d.message + '\n';
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    if (d.type === 'task.add') {
+      bars[d.name] = {total: d.total, completed: 0};
+      renderBars();
+    }
+
+    if (d.type === 'task.advance') {
+      if (bars[d.name]) bars[d.name].completed = d.completed;
+      renderBars();
+    }
+
+    if (d.type === 'task.update' && bars[d.name]) {
+      bars[d.name].description = d.description;
+      renderBars();
+    }
+
+    if (d.type === 'done' || d.type === 'job.completed' || d.type === 'job.failed' || d.type === 'job.cancelled') {
+      es.close();
+      document.getElementById('btn-start').disabled = false;
+      document.getElementById('btn-cancel').disabled = true;
+      const status = d.status || (d.type === 'job.completed' ? 'completed' : 'failed');
+      document.getElementById('status-indicator').textContent = '● ' + status;
+      document.getElementById('status-indicator').className = status === 'completed' ? 'status-idle' : 'status-error';
+    }
+  });
+
+  function renderBars() {
+    progressEl.innerHTML = Object.entries(bars).map(([name, b]) => {
+      const pct = b.total > 0 ? Math.round(b.completed / b.total * 100) : 0;
+      const desc = b.description || name;
+      return `<div class="progress-row">
+        <span>${desc}</span>
+        <div class="progress-bar"><div class="fill" style="width:${pct}%">${pct}%</div></div>
+        <span>${b.completed}/${b.total}</span>
+      </div>`;
+    }).join('');
+  }
+}
+
+// ── Load files ──
+async function loadFiles() {
+  const r = await fetch('/api/files');
+  const items = await r.json();
+  document.getElementById('file-list').innerHTML = items.length === 0 ? 'No downloads yet.' :
+    '<table><tr><th>Name</th><th>Tracks</th></tr>' +
+    items.map(i => `<tr>
+      <td>${i.is_dir ? `<a href="/playlist/${encodeURIComponent(i.path)}">📁 ${i.name}</a>` : `🎵 ${i.name} (${i.size_mb} MB)`}</td>
+      <td>${i.mp3_count || '-'}</td>
+    </tr>`).join('') +
+    '</table>';
+}
+
+// ── Load history ──
+async function loadHistory() {
+  const r = await fetch('/api/jobs');
+  const jobs = await r.json();
+  document.getElementById('history-list').innerHTML = jobs.length === 0 ? 'No runs yet.' :
+    '<table><tr><th>Time</th><th>Status</th><th>Links</th><th>Exit</th></tr>' +
+    jobs.map(j => `<tr>
+      <td>${new Date(j.created_at*1000).toLocaleString()}</td>
+      <td class="status-${j.status}">${j.status}</td>
+      <td>${j.links ? j.links.length : '?'} links</td>
+      <td>${j.exit_code ?? '-'}</td>
+    </tr>`).join('') +
+    '</table>';
+}
+
+// ── Init ──
+loadLinks();
+loadFiles();
+loadHistory();
+setInterval(async () => {
+  const r = await fetch('/api/status');
+  const s = await r.json();
+  if (s.running) {
+    document.getElementById('status-indicator').textContent = '● Running';
+    document.getElementById('status-indicator').className = 'status-running';
+    document.getElementById('btn-start').disabled = true;
+    document.getElementById('btn-cancel').disabled = false;
+  } else if (!document.getElementById('btn-start').disabled) {
+    document.getElementById('btn-cancel').disabled = true;
+  }
+}, 3000);
+</script>
+</body>
+</html>

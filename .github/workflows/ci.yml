@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff
-      - run: ruff check src/ main.py
+      - run: ruff check src/ main.py web_app.py
 
   type-check:
     runs-on: ubuntu-latest
@@ -24,12 +24,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install mypy psutil spotipy python-dotenv
-      - run: mypy src/ main.py --ignore-missing-imports
+      - run: pip install mypy psutil spotipy python-dotenv fastapi jinja2
+      - run: mypy src/ main.py web_app.py --ignore-missing-imports
 
   docker-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build Docker image
+      - name: Build CLI Docker image
         run: docker build -t playlist-downloader .
+      - name: Build Web Docker image
+        run: docker build -t playlist-downloader-web -f Dockerfile.web .

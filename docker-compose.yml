@@ -1,12 +1,33 @@
 version: "3.8"
 
 services:
-  playlist-downloader:
-    build: .
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    image: playlist-downloader-web:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./.spotdl:/root/.config/spotdl
+      - ./links.txt:/app/links.txt
+      - ./downloads:/app/downloads
+      - ./.env:/app/.env:ro
+    environment:
+      - OUTPUT_DIR=/app/downloads
+      - LINKS_FILE=/app/links.txt
+    restart: unless-stopped
+
+  cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: playlist-downloader:latest
     volumes:
       - ./.spotdl:/root/.config/spotdl
       - ./links.txt:/app/input_links.txt:ro
       - ./downloads:/app/music
       - ./.env:/app/.env:ro
+    profiles:
+      - cli
     command: ["input_links.txt", "/app/music"]

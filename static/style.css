@@ -1,0 +1,111 @@
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text: #c9d1d9;
+  --muted: #8b949e;
+  --accent: #58a6ff;
+  --green: #3fb950;
+  --red: #f85149;
+  --yellow: #d2991d;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+header {
+  display: flex; align-items: center; gap: 16px;
+  padding: 12px 0; border-bottom: 1px solid var(--border); margin-bottom: 16px;
+}
+header h1 { font-size: 1.4rem; color: var(--accent); }
+.back-link { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+
+nav { display: flex; gap: 4px; margin-bottom: 16px; }
+.tab {
+  background: var(--surface); color: var(--muted); border: 1px solid var(--border);
+  padding: 8px 20px; cursor: pointer; border-radius: 6px 6px 0 0; font-size: 0.9rem;
+  transition: all 0.15s;
+}
+.tab:hover { color: var(--text); }
+.tab.active { background: var(--bg); color: var(--accent); border-bottom-color: var(--bg); }
+
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+.panel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px; margin-bottom: 16px;
+}
+.panel h2 { font-size: 1rem; margin-bottom: 12px; color: var(--accent); }
+
+textarea {
+  width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 12px; font-family: monospace; font-size: 0.85rem;
+  resize: vertical;
+}
+
+.controls {
+  display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap;
+}
+.controls label { font-size: 0.85rem; color: var(--muted); cursor: pointer; }
+.controls input[type="checkbox"] { accent-color: var(--accent); }
+
+button {
+  background: var(--accent); color: #fff; border: none;
+  padding: 8px 18px; border-radius: 6px; cursor: pointer; font-size: 0.9rem;
+  transition: opacity 0.15s;
+}
+button:hover { opacity: 0.85; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+button.danger { background: var(--red); }
+
+.muted { color: var(--muted); font-size: 0.85rem; margin-top: 8px; }
+
+.status-idle { color: var(--green); font-weight: 600; }
+.status-running { color: var(--yellow); font-weight: 600; animation: pulse 1s infinite; }
+.status-error { color: var(--red); font-weight: 600; }
+
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+.progress-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 0.85rem; }
+.progress-row span:first-child { min-width: 180px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.progress-bar {
+  flex: 1; height: 20px; background: var(--bg); border-radius: 10px; overflow: hidden;
+  border: 1px solid var(--border);
+}
+.progress-bar .fill {
+  height: 100%; background: var(--accent); border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.7rem; color: #fff; min-width: 40px; transition: width 0.3s;
+}
+
+.log-panel { max-height: 500px; overflow: hidden; }
+.log-panel pre {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 12px; font-size: 0.75rem; font-family: 'Cascadia Code', 'Fira Code', monospace;
+  line-height: 1.5; height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+  color: var(--muted);
+}
+
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th { text-align: left; color: var(--muted); font-weight: 600; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+tr:hover { background: rgba(88,166,255,0.05); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.status-completed { color: var(--green); }
+.status-failed { color: var(--red); }
+.status-cancelled { color: var(--yellow); }
+.status-running { color: var(--yellow); }
+
+audio { background: var(--bg); border-radius: 4px; }
