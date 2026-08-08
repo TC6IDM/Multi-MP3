@@ -1,0 +1,12 @@
+version: "3.8"
+
+services:
+  playlist-downloader:
+    build: .
+    image: playlist-downloader:latest
+    volumes:
+      - ./.spotdl:/root/.config/spotdl
+      - ./links.txt:/app/input_links.txt:ro
+      - ./downloads:/app/music
+      - ./.env:/app/.env:ro
+    command: ["input_links.txt", "/app/music"]

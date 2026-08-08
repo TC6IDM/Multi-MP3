@@ -1,12 +1,10 @@
 import json
 import os
-import re
-import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple
 import logging
-import urllib.request
+from urllib.request import urlopen
 
 from spotipy.oauth2 import SpotifyClientCredentials
 from spotdl.utils import spotify
@@ -42,41 +40,15 @@ class SpotifyDownloader(BaseDownloader):
         name = "SpotDL"
         return self._download(name, link, cmd, _errors_file=errors_file)
 
-        # self.logger.info(f"🎵 spotdl: {link.split('?')[0]}")
-        # self.logger.debug(f"Command: {' '.join(cmd)}")
-        
-        # env = os.environ.copy()
-        # try:
-        #     proc = subprocess.run(cmd, env=env, cwd=str(self.output_dir), 
-        #                           capture_output=False, text=True, timeout=3600)
-        #     if proc.returncode == 0:
-        #         self.logger.info("✅ spotdl complete")
-        #     else:
-        #         self.logger.warning(f"spotdl exit code: {proc.returncode}")
-        #     return proc.returncode, errors_file
-        # except subprocess.TimeoutExpired:
-        #     self.logger.warning("⏰ spotdl timeout (1h)")
-        #     return 1, errors_file
-        # except Exception as e:
-        #     self.logger.error(f"💥 spotdl error: {e}")
-        #     return 1, errors_file
-
     def cleanup(self, playlist_name: str) -> List[Song]:
-        """Scan for missing tracks using metadata (your check_missing_tracks logic)."""
-        # Aggregate all missing across playlists in output_dir
-        all_missing = []
-
+        """Scan for missing tracks using Spotify metadata."""
         playlist_dir = self.output_dir / playlist_name
 
         if not playlist_dir.is_dir():
             self.logger.info(f"No playlist dir for cleanup: {playlist_name}")
             return []
 
-        missing = self._find_missing_in_playlist(playlist_dir)
-        all_missing.extend(missing)
-        # if all_missing:
-        #     self.logger.info(f"⚠️ Total {len(all_missing)} missing Spotify tracks")
-        return all_missing
+        return self._find_missing_in_playlist(playlist_dir)
 
     def fetch_metadata_image(self, url: str) -> str | None:
         """Your getImage: fetch playlist/album image/metadata."""
@@ -108,33 +80,29 @@ class SpotifyDownloader(BaseDownloader):
         
         try:
             image_path = icons_dir / f"{safe_name}.jpg"
-            urllib.request.urlretrieve(out['images'][0]['url'], image_path)
+            with urlopen(out['images'][0]['url']) as resp, open(image_path, 'wb') as f:
+                f.write(resp.read())
             self.logger.info(f"🖼️ Image saved: {image_path}")
         except Exception as e:
             self.logger.warning(f"Image fetch failed: {e}")
         
         return out['name']
 
-    def _use_correct_config(self, link: str) -> None:
+    def _use_correct_config(self, link: str) -> str:
         """
-        Detect link type (playlist/album/track/artist) and update spotdl config.json
-        output template accordingly.
+        Detect link type (playlist/album/track/artist) and return the
+        appropriate spotdl output template.
         """
-
-        # Determine type from URL
         if "playlist" in link:
-            output_template = "{list-name}/{list-position} {title} - {artists}.{output-ext}"
+            return "{list-name}/{list-position} {title} - {artists}.{output-ext}"
         elif "album" in link:
-            output_template = "{list-name}/{track-number} {title} - {artists}.{output-ext}"
+            return "{list-name}/{track-number} {title} - {artists}.{output-ext}"
         elif "artist" in link:
-            output_template = "{list-name}/{title} - {artists}.{output-ext}"
+            return "{list-name}/{title} - {artists}.{output-ext}"
         elif "track" in link:
-            output_template = "{title}/{title} - {artists}.{output-ext}"
+            return "{title}/{title} - {artists}.{output-ext}"
         else:
-            self.logger.info(f"ℹ️ Unknown Spotify type for link: {link}")
-            return  # do not touch config if type is unknown
-        
-        return output_template
+            raise ValueError(f"Unknown Spotify link type — cannot determine output template: {link}")
 
     def _find_missing_in_playlist(self, playlist_dir: Path) -> List[Song]:
         """Private: your check_missing_tracks_with_metadata_spotify."""
@@ -164,21 +132,6 @@ class SpotifyDownloader(BaseDownloader):
         
         # Scan files for numbers/padding
         numbers, padding = self._get_padding(playlist_dir)
-        # numbers = []
-        # padding = 0
-        # for p in playlist_dir.iterdir():
-        #     if p.suffix.lower() in ('.mp3', '.flac', '.m4a'):
-        #         match = re.match(r'^\s*(\d+)', p.stem)
-        #         if match:
-        #             num = int(match.group(1))
-        #             numbers.append(num)
-        #             padding = max(padding, len(match.group(1)))
-        
-        # if not numbers:
-        #     self.logger.info(f"ℹ️ No numbered files in: {playlist_name}")
-        #     return []
-    
-        # numbers.sort()
         missing_nums = [n for n in range(1, expected_count + 1) if n not in numbers]
         if not missing_nums:
             self.logger.info(f"✅ All {expected_count} tracks present in: {playlist_name}")
