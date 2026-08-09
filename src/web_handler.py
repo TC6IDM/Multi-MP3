@@ -1,20 +1,26 @@
-"""Custom logging handler that pushes records to an async queue for SSE streaming."""
+"""Custom logging handler that pushes records to a thread-safe bus for SSE streaming."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
 
+from src.event_bus import EventBus
+
 
 class SSELogHandler(logging.Handler):
-    """Pushes formatted log records into an asyncio.Queue for SSE streaming."""
+    """Pushes formatted log records into an EventBus for SSE streaming.
 
-    def __init__(self, event_queue: asyncio.Queue, level: int = logging.INFO) -> None:
+    Uses EventBus (deque + lock) rather than asyncio.Queue because log records
+    are emitted from download worker threads, and asyncio.Queue is not
+    thread-safe.
+    """
+
+    def __init__(self, event_bus: EventBus, level: int = logging.INFO) -> None:
         super().__init__(level=level)
-        self._queue = event_queue
-        self.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
+        self._bus = event_bus
+        self.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(threadName)s | %(message)s'))
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -25,8 +31,6 @@ class SSELogHandler(logging.Handler):
                 "level": record.levelname,
                 "message": msg,
             })
-            self._queue.put_nowait(payload)
-        except asyncio.QueueFull:
-            pass
+            self._bus.push(payload)
         except Exception:
             self.handleError(record)

@@ -1,8 +1,10 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+import json
 import logging
-from typing import Dict, List
+import threading
+from typing import Any, Dict, List
 
 from src.downloaders.base import BaseDownloader
 from src.utils import read_links
@@ -31,16 +33,17 @@ class Coordinator:
                  parallel: bool = False, max_workers: int = 4,
                  use_tui: bool = False,
                  progress: DownloadProgress | None = None):
-        self.output_dir = output_dir
+        self.output_dir = output_dir.resolve()
         self.logger = logger
         self.spotify_client_id = spotify_client_id
         self.spotify_client_secret = spotify_client_secret
         self.parallel = parallel
         self.max_workers = max_workers
         self.tui = progress or DownloadProgress(enabled=use_tui)
+        self._downloaders: Dict[str, BaseDownloader] = {}
+        self._downloader_lock = threading.Lock()
 
-    def _get_downloader(self, provider: str) -> BaseDownloader:
-        """Factory for provider-specific downloaders."""
+    def _build_downloader(self, provider: str) -> BaseDownloader:
         if provider == "spotify":
             return SpotifyDownloader(self.output_dir, self.logger,
                                      self.spotify_client_id, self.spotify_client_secret)
@@ -51,25 +54,87 @@ class Coordinator:
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
+    def _get_downloader(self, provider: str) -> BaseDownloader:
+        """Return the cached downloader for a provider, creating it once.
+
+        Rebuilding SpotifyDownloader per link re-created SpotifyClientCredentials
+        every time, which re-runs the client-credentials token exchange.
+        """
+        d = self._downloaders.get(provider)
+        if d is not None:
+            return d
+        with self._downloader_lock:
+            d = self._downloaders.get(provider)
+            if d is None:
+                d = self._build_downloader(provider)
+                self._downloaders[provider] = d
+            return d
+
     # ── Phase 1: Download only (no cleanup) ──────────────────────────
 
     def _download_single_link(self, provider: str, link: str,
                                index: int, total: int) -> LinkResult:
         """Download one link — no cleanup. Safe to run concurrently."""
         downloader = self._get_downloader(provider)
+        short_link = link.split("?")[0].split("/")[-1] or link.split("?")[0]
+
+        # Progress callback is passed per download call, so a shared downloader
+        # instance can serve several concurrent links without them clobbering
+        # one another's callback.
+        def _forward_progress(evt: str, data: dict) -> None:
+            self.tui.track_progress(provider, link, evt, data)
+
+        # ── Pre-fetch metadata for richer link_started event ──────────
+        playlist_name = short_link
+        total_tracks = 0
+        track_list: List[Dict[str, Any]] = []
+        if provider == "spotify":
+            try:
+                playlist_name = downloader.fetch_metadata_image(link) or short_link
+                # Read track count + track list from saved metadata JSON
+                safe_name = "".join(
+                    c for c in playlist_name if c.isalnum() or c in (' ', '-', '_')
+                ).rstrip()
+                meta_path = self.output_dir / ".metadata" / f"{safe_name}.json"
+                if meta_path.is_file():
+                    with open(meta_path, encoding="utf-8") as f:
+                        meta = json.load(f)
+                    # Normalize: Spotify wraps playlist tracks in .track, albums are direct
+                    raw_items = meta.get("tracks", {}).get("items", [])
+                    total_tracks = meta.get("tracks", {}).get("total", len(raw_items))
+                    for item in raw_items:
+                        t = item.get("track", item)  # playlist → .track, album → direct
+                        track_list.append({
+                            "num": t.get("track_number", 0),
+                            "title": t.get("name", ""),
+                            "artists": [a.get("name", "") for a in t.get("artists", [])],
+                            "duration_ms": t.get("duration_ms", 0),
+                        })
+                    self.logger.info(f"📊 {playlist_name}: {total_tracks} tracks")
+            except Exception as e:
+                self.logger.warning(f"Metadata pre-fetch failed: {e}")
+
+        # Emit link started with real name + track count when available
+        self.tui.link_started(provider, link, playlist_name, total_tracks)
+        if track_list:
+            self.tui.link_metadata(provider, link, track_list)
 
         self.logger.info(f"\n{'='*60}")
-        self.logger.info(f"[{provider.upper()} {index}/{total}] {link.split('?')[0]}")
+        self.logger.info(f"[{provider.upper()} {index}/{total}] {short_link}")
 
         try:
-            code, _ = downloader.download(link)
+            code, _ = downloader.download(link, on_progress=_forward_progress)
             if code != 0:
                 self.logger.warning(f"Failed (code {code})")
-            playlist_name = downloader.fetch_metadata_image(link) or ""
+            # For non-Spotify, fetch metadata after download
+            if provider != "spotify":
+                playlist_name = downloader.fetch_metadata_image(link) or playlist_name
         except Exception as e:
             self.logger.error(f"💥 {provider} error on {link}: {e}")
             code = 1
-            playlist_name = ""
+
+        # Emit link complete
+        self.tui.link_complete(provider, link, playlist_name, code)
 
         return LinkResult(
             provider=provider, link=link, playlist_name=playlist_name,
@@ -79,24 +144,46 @@ class Coordinator:
     # ── Phase 2: Cleanup (runs after all downloads complete) ──────────
 
     def _cleanup_results(self, results: List[LinkResult]) -> None:
-        """Run cleanup on completed downloads. Provider-aware."""
-        # YouTube and SoundCloud: bulk cleanup scans whole output dir
-        providers_needing_cleanup = set(r.provider for r in results)
-        for provider in providers_needing_cleanup:
-            downloader = self._get_downloader(provider)
-            # Use a dummy playlist name — YouTube/SoundCloud scan all dirs
+        """Run cleanup once for a completed batch.
+
+        YouTube and SoundCloud cleanup are both whole-directory sweeps, so
+        running one per provider scanned and rewrote every playlist twice —
+        and, because providers run concurrently, two sweeps could hit the same
+        .metadata/<name>.json at once. Do a single sweep instead, and give
+        Spotify its per-playlist pass (it needs the playlist name).
+        """
+        providers = {r.provider for r in results}
+
+        # Spotify: per-playlist, keyed by the name resolved during download
+        if "spotify" in providers:
+            downloader = self._get_downloader("spotify")
+            for r in results:
+                if r.provider != "spotify" or not r.playlist_name:
+                    continue
+                try:
+                    downloader.cleanup(r.playlist_name)
+                except Exception as e:
+                    self.logger.error(f"💥 Cleanup error (spotify/{r.playlist_name}): {e}")
+
+        # YouTube + SoundCloud: one shared directory sweep for both
+        sweepers = [p for p in ("soundcloud", "youtube") if p in providers]
+        if sweepers:
+            # SoundCloud additionally clears stray root-level .info.json files,
+            # so prefer it as the sweeper when present.
+            provider = sweepers[0]
             try:
-                downloader.cleanup("")
+                self._get_downloader(provider).cleanup("")
             except Exception as e:
                 self.logger.error(f"💥 Cleanup error ({provider}): {e}")
 
     # ── Per-provider processing ──────────────────────────────────────
 
-    def process_provider(self, provider: str, links: List[str]) -> int:
-        """Download all links for one provider, then cleanup."""
+    def process_provider(self, provider: str, links: List[str]) -> List[LinkResult]:
+        """Download every link for one provider. Cleanup happens later, once
+        all providers have finished, so concurrent sweeps cannot race."""
         if not links:
             self.logger.info(f"ℹ️ No {provider} links")
-            return 0
+            return []
 
         self.logger.info(f"🎯 Starting {len(links)} {provider} links...")
 
@@ -106,12 +193,8 @@ class Coordinator:
             results = self._download_sequential(provider, links)
 
         exit_code = max((r.code for r in results), default=0)
-
-        # Barrier: all downloads done, now cleanup
-        self.logger.info(f"🧹 Running {provider} cleanup...")
-        self._cleanup_results(results)
-        self.logger.info(f"✅ {provider} complete (exit: {exit_code})")
-        return exit_code
+        self.logger.info(f"✅ {provider} downloads done (exit: {exit_code})")
+        return results
 
     def _download_sequential(self, provider: str, links: List[str]) -> List[LinkResult]:
         """Download links one at a time (no cleanup)."""
@@ -166,6 +249,8 @@ class Coordinator:
 
         exit_code = 0
 
+        all_results: List[LinkResult] = []
+
         with self.tui:
             # Run all provider download phases in parallel
             with ThreadPoolExecutor(max_workers=min(len(active_providers), self.max_workers)) as executor:
@@ -176,11 +261,21 @@ class Coordinator:
                 for future in as_completed(future_to_provider):
                     provider = future_to_provider[future]
                     try:
-                        code = future.result()
+                        results = future.result()
+                        all_results.extend(results)
+                        code = max((r.code for r in results), default=0)
                         if code != 0:
                             exit_code = code
                     except Exception as e:
                         self.logger.error(f"💥 {provider} provider crashed: {e}")
                         exit_code = 1
 
+            # Single cleanup barrier once every provider has finished writing.
+            # Doing this per provider meant the output tree was swept once per
+            # provider, concurrently, on the same metadata files.
+            if all_results:
+                self.logger.info("🧹 Running cleanup...")
+                self._cleanup_results(all_results)
+
+        self.logger.info(f"🏁 All providers complete (exit: {exit_code})")
         return exit_code

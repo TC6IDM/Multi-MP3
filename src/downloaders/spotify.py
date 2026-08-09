@@ -2,10 +2,11 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 import logging
 from urllib.request import urlopen
 
+import spotipy as spotipy_lib
 from spotipy.oauth2 import SpotifyClientCredentials
 from spotdl.utils import spotify
 
@@ -21,7 +22,9 @@ class SpotifyDownloader(BaseDownloader):
         os.environ['SPOTIFY_CLIENT_ID'] = client_id
         os.environ['SPOTIFY_CLIENT_SECRET'] = client_secret
 
-    def download(self, link: str) -> Tuple[int, Path]:
+    def download(self, link: str,
+                 on_progress: Callable[[str, Dict[str, Any]], None] | None = None
+                 ) -> Tuple[int, Path]:
         """Implement BaseDownloader.download: run spotdl."""
         errors_file = self.errors_dir / f"errors-spotdl-{datetime.now().strftime('%Y%m%d%H%M%S%f')}.txt"
         
@@ -33,12 +36,20 @@ class SpotifyDownloader(BaseDownloader):
             "--client-id", self.client_credentials_manager.client_id,
             "--client-secret", self.client_credentials_manager.client_secret,
             "--output", output_template,
-            # "--yt-dlp-args", "--write-info-json --write-playlist-metafiles --no-abort-on-error --ignore-errors",
+            # Rich's TUI wraps long lines inside a bordered box, which split
+            # `Downloaded "Some Title"` across two lines and broke progress
+            # parsing entirely. --simple-tui emits plain, unwrapped lines.
+            "--simple-tui",
+            "--log-level", "INFO",
+            # spotdl drives its own bundled yt-dlp, which needs a JS runtime for
+            # YouTube's challenge — without it every track fails with HTTP 403.
+            "--yt-dlp-args", "--js-runtimes deno",
             "download",
             link,
         ]
         name = "SpotDL"
-        return self._download(name, link, cmd, _errors_file=errors_file)
+        return self._download(name, link, cmd, _errors_file=errors_file,
+                              on_progress=on_progress)
 
     def cleanup(self, playlist_name: str) -> List[Song]:
         """Scan for missing tracks using Spotify metadata."""
@@ -51,13 +62,15 @@ class SpotifyDownloader(BaseDownloader):
         return self._find_missing_in_playlist(playlist_dir)
 
     def fetch_metadata_image(self, url: str) -> str | None:
-        """Your getImage: fetch playlist/album image/metadata."""
+        """Fetch playlist/album image and metadata."""
         session = spotify.Spotify(client_credentials_manager=self.client_credentials_manager)
-        
+
         if "playlist" in url:
             out = session.playlist(url)
+            self._paginate_tracks(out, url)
         elif "album" in url:
             out = session.album(url)
+            self._paginate_tracks(out, url)
         elif "artist" in url:
             out = session.artist(url)
         elif "track" in url:
@@ -65,28 +78,72 @@ class SpotifyDownloader(BaseDownloader):
         else:
             self.logger.warning(f"Unknown Spotify type in {url}")
             return None
-        
-        # Save metadata JSON and image (your logic)
+
+        # Save metadata JSON and image
         icons_dir = self.output_dir / ".icons"
         icons_dir.mkdir(parents=True, exist_ok=True)
         metadata_dir = self.output_dir / ".metadata"
         metadata_dir.mkdir(parents=True, exist_ok=True)
-        
+
         safe_name = "".join(c for c in out['name'] if c.isalnum() or c in (' ', '-', '_')).rstrip()
         json_path = metadata_dir / f"{safe_name}.json"
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(out, f, indent=2, ensure_ascii=False)
         self.logger.info(f"📄 Spotify metadata: {json_path}")
-        
+
         try:
             image_path = icons_dir / f"{safe_name}.jpg"
             with urlopen(out['images'][0]['url']) as resp, open(image_path, 'wb') as f:
                 f.write(resp.read())
-            self.logger.info(f"🖼️ Image saved: {image_path}")
+            self.logger.info(f"🏾 Image saved: {image_path}")
         except Exception as e:
             self.logger.warning(f"Image fetch failed: {e}")
-        
+
         return out['name']
+
+    def _paginate_tracks(self, out: dict, url: str) -> None:
+        """Handle Spotify API pagination — fetches all tracks beyond the 100-item limit."""
+        tracks = out.get("tracks")
+        if not tracks:
+            return
+
+        total = tracks.get("total", 0)
+        items = tracks.get("items", [])
+        if total <= len(items):
+            return  # Already have all tracks
+
+        self.logger.info(f"📋 Paginating {total} tracks (have {len(items)})...")
+
+        # Extract the Spotify ID from the URL
+        sp_id = url.rstrip("/").split("/")[-1].split("?")[0]
+        sp = spotipy_lib.Spotify(client_credentials_manager=self.client_credentials_manager)
+
+        # Determine fetch method — playlists vs albums have different APIs
+        is_playlist = "playlist" in url
+        offset = len(items)
+        while offset < total:
+            if is_playlist:
+                page = sp.playlist_tracks(
+                    sp_id, limit=100, offset=offset,
+                    fields="items(track(name,artists(name),track_number,duration_ms,external_urls)),total",
+                    market="from_token",
+                )
+            else:
+                page = sp.album_tracks(
+                    sp_id, limit=50, offset=offset,
+                    market="from_token",
+                )
+
+            page_items = page.get("items", [])
+            if not page_items:
+                break
+            items.extend(page_items)
+            offset += len(page_items)
+            self.logger.debug(f"  Fetched {len(items)}/{total} tracks")
+
+        tracks["items"] = items
+        out["tracks"] = tracks
+        self.logger.info(f"📊 All {len(items)} tracks retrieved")
 
     def _use_correct_config(self, link: str) -> str:
         """

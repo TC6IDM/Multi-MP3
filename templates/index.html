@@ -38,9 +38,9 @@
 <!-- ── Live Tab ── -->
 <section id="tab-live" class="tab-content">
   <div class="panel">
-    <h2>Progress</h2>
-    <div id="progress-bars"></div>
-    <div class="controls">
+    <h2>Download Progress</h2>
+    <div id="provider-accordion"></div>
+    <div class="controls" style="margin-top:1rem">
       <button id="btn-cancel" onclick="cancelJob()" disabled>⏹ Cancel</button>
     </div>
   </div>
@@ -67,6 +67,20 @@
 </section>
 
 <script>
+// ── Provider icons & ordering ──
+const PROVIDER_ICONS = { youtube: '📺', soundcloud: '🔊', spotify: '🎧' };
+const PROVIDER_ORDER = ['youtube', 'soundcloud', 'spotify'];
+
+// ── Live state ──
+let liveState = { providers: {}, currentJobId: null };
+
+function ensureProvider(p) {
+  if (!liveState.providers[p]) {
+    liveState.providers[p] = { expanded: true, links: {} };
+  }
+  return liveState.providers[p];
+}
+
 // ── Tab Switching ──
 document.querySelectorAll('.tab').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -86,7 +100,7 @@ async function loadLinks() {
   document.getElementById('links-input').value = d.text;
   if (d.parsed.total > 0) {
     document.getElementById('parse-preview').innerHTML =
-      `Parsed: ${d.parsed.total} links (📀 ${d.parsed.spotify} 🔊 ${d.parsed.soundcloud} 📺 ${d.parsed.youtube})`;
+      `Parsed: ${d.parsed.total} links (🎧 ${d.parsed.spotify} 🔊 ${d.parsed.soundcloud} 📺 ${d.parsed.youtube})`;
   }
 }
 
@@ -109,11 +123,36 @@ async function startJob() {
   });
   if (!r.ok) { alert((await r.json()).detail); return; }
 
-  const {job_id} = await r.json();
+  const {job_id, links: linksByProvider} = await r.json();
+
+  // Tear down the previous run's DOM + caches before building the new one
+  resetLiveDOM();
+
+  // Pre-populate all cards from the link list
+  liveState = { providers: {}, currentJobId: job_id };
+  for (const [provider, providerLinks] of Object.entries(linksByProvider)) {
+    if (!providerLinks || !providerLinks.length) continue;
+    const p = ensureProvider(provider);
+    p.expanded = true;
+    for (const link of providerLinks) {
+      const shortName = link.split('?')[0].split('/').pop() || link;
+      p.links[link] = {
+        name: shortName,
+        image: null,
+        status: 'pending',
+        tracks_done: 0,
+        tracks_total: 0,
+        current_title: 'Waiting...',
+        code: null,
+      };
+    }
+  }
   document.getElementById('btn-start').disabled = true;
   document.getElementById('btn-cancel').disabled = false;
   document.getElementById('status-indicator').textContent = '● Running';
   document.getElementById('status-indicator').className = 'status-running';
+
+  renderAccordion();
 
   // Switch to Live tab
   document.querySelector('.tab[data-tab="live"]').click();
@@ -129,60 +168,751 @@ async function cancelJob() {
   }
 }
 
-// ── SSE event stream ──
+// ── Bounded global log ring buffer ──
+// textContent += was O(n^2) and unbounded — it froze the tab after a few
+// thousand lines. Keep a capped array and flush on a timer instead.
+const GLOBAL_LOG_MAX = 400;
+const PLAYLIST_LOG_MAX = 150;
+let globalLog = [];
+let _logFlushTimer = null;
+
+function pushGlobalLog(line) {
+  globalLog.push(line);
+  if (globalLog.length > GLOBAL_LOG_MAX) {
+    globalLog.splice(0, globalLog.length - GLOBAL_LOG_MAX);
+  }
+  if (!_logFlushTimer) {
+    _logFlushTimer = setTimeout(flushGlobalLog, 300);
+  }
+}
+
+function flushGlobalLog() {
+  _logFlushTimer = null;
+  const logEl = document.getElementById('log-output');
+  if (!logEl) return;
+  const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+  logEl.textContent = globalLog.join('\n');
+  if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+}
+
+function pushPlaylistLog(provider, linkId, line) {
+  const p = liveState.providers[provider];
+  if (!p || !p.links[linkId]) return;
+  const info = p.links[linkId];
+  if (!info.logs) info.logs = [];
+  info.logs.push(line);
+  if (info.logs.length > PLAYLIST_LOG_MAX) {
+    info.logs.splice(0, info.logs.length - PLAYLIST_LOG_MAX);
+  }
+  // Only touch the DOM if this card's log pane is actually open
+  if (info.logsOpen) appendPlaylistLogDOM(provider, linkId, line);
+}
+
+function appendPlaylistLogDOM(provider, linkId, line) {
+  // Uses the persistent DOM cache — no querySelector scan per log line.
+  const pEntry = domCache.providers[provider];
+  const card = pEntry && pEntry.cards[linkId];
+  if (!card) return;
+  const pane = card.logPane;
+  const atBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 30;
+  pane.appendChild(document.createTextNode(line + '\n'));
+  while (pane.childNodes.length > PLAYLIST_LOG_MAX) pane.removeChild(pane.firstChild);
+  if (atBottom) pane.scrollTop = pane.scrollHeight;
+}
+
+// ── Track title helpers ────────────────────────────────────────────────
+// Providers report full output paths ("My Playlist/08 Artist - Song.mp3").
+// Strip the directory and container extension so rows stay readable and so
+// the .webm and .mp3 lines for one track don't look like two tracks.
+function cleanTrackTitle(s) {
+  if (!s) return '';
+  let t = String(s).trim().replace(/\\/g, '/');
+  const slash = t.lastIndexOf('/');
+  if (slash >= 0) t = t.slice(slash + 1);
+  return t.replace(/\.(mp3|m4a|webm|opus|ogg|wav|flac|mp4|mkv|part)$/i, '');
+}
+
+function isPlaceholder(title) {
+  return !title || /^Track \d+$/.test(title);
+}
+
+// ── O(1) track state bookkeeping ───────────────────────────────────────
+// Every per-event operation below is constant time. The earlier version used
+// Array.find()/filter() per event, which made a full playlist O(tracks^2).
+
+function normKey(s) {
+  return String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+// Providers name a track differently than the metadata does: Spotify gives
+// {title:"Let Me Go", artists:["Skepsis"]} while spotdl prints
+// "Skepsis - Let Me Go". Index several aliases so either form resolves.
+function addTrackKeys(info, t, idx) {
+  const title = t.title || '';
+  if (!title) return;
+  const artists = t.artists || [];
+  const keys = [title];
+  if (artists.length) {
+    keys.push(artists[0] + ' - ' + title);
+    keys.push(artists.join(', ') + ' - ' + title);
+    keys.push(title + ' - ' + artists[0]);
+  }
+  for (const k of keys) {
+    const nk = normKey(k);
+    if (nk && !info._titleIndex.has(nk)) info._titleIndex.set(nk, idx);
+  }
+}
+
+function lookupTrack(info, query) {
+  if (!info._titleIndex) return undefined;
+  const nk = normKey(query);
+  if (!nk) return undefined;
+  let idx = info._titleIndex.get(nk);
+  if (idx !== undefined) return idx;
+  // Fall back to the portion after an "Artist - " prefix
+  const dash = nk.indexOf(' - ');
+  if (dash > 0) {
+    idx = info._titleIndex.get(nk.slice(dash + 3));
+    if (idx !== undefined) return idx;
+    idx = info._titleIndex.get(nk.slice(0, dash));
+  }
+  return idx;
+}
+
+function initTrackIndex(info) {
+  info._titleIndex = new Map();
+  info._dirty = new Set();
+  info._doneCount = 0;
+  info._pendingCursor = 0;
+  for (let i = 0; i < info.tracks.length; i++) {
+    const t = info.tracks[i];
+    addTrackKeys(info, t, i);
+    if (t.status === 'downloaded') info._doneCount++;
+  }
+  info.tracks_done = info._doneCount;
+}
+
+// Advance a cursor instead of re-scanning for the first unfinished track.
+function nextPending(info) {
+  const tracks = info.tracks;
+  let i = info._pendingCursor || 0;
+  while (i < tracks.length && tracks[i].status === 'downloaded') i++;
+  info._pendingCursor = i;
+  return i < tracks.length ? tracks[i] : null;
+}
+
+function setTrackStatus(info, track, status) {
+  if (!track || track.status === status) return;
+  if (track.status === 'downloaded' && status !== 'downloaded') info._doneCount--;
+  if (status === 'downloaded' && track.status !== 'downloaded') info._doneCount++;
+  track.status = status;
+  info.tracks_done = info._doneCount;
+  if (info._dirty) info._dirty.add(track.num);
+}
+
+function setTrackTitle(info, track, title) {
+  if (!track || !title || track.title === title) return;
+  track.title = title;
+  if (info._titleIndex) addTrackKeys(info, track, track.num - 1);
+  if (info._dirty) info._dirty.add(track.num);
+}
+
+// ── SSE event stream with per-provider/playlist cards ──
 function streamEvents(jobId) {
   const logEl = document.getElementById('log-output');
-  const progressEl = document.getElementById('progress-bars');
-  const bars = {};
   logEl.textContent = '';
+  globalLog = [];
 
   const es = new EventSource('/api/jobs/' + jobId + '/events');
   es.addEventListener('message', e => {
-    const d = JSON.parse(e.data);
+    let d;
+    try { d = JSON.parse(e.data); } catch (_) { return; }
+    handleLiveEvent(d, es);
+  });
+
+  es.addEventListener('error', () => {
+    // EventSource will auto-reconnect
+  });
+}
+
+// Applies one SSE event to live state + DOM. Kept separate from the transport
+// so it can be driven directly (tests, replay) without a live EventSource.
+function handleLiveEvent(d, es) {
+  {
     if (d.type === 'ping') return;
 
     if (d.type === 'log') {
-      logEl.textContent += d.message + '\n';
-      logEl.scrollTop = logEl.scrollHeight;
+      pushGlobalLog(d.message);
+      return;
     }
 
-    if (d.type === 'task.add') {
-      bars[d.name] = {total: d.total, completed: 0};
-      renderBars();
+    // ── Link lifecycle events ──
+    if (d.type === 'link.started') {
+      const p = ensureProvider(d.provider);
+      const linkId = d.link;
+      if (!p.links[linkId]) {
+        p.links[linkId] = {
+          name: d.name || linkId.split('/').pop() || linkId,
+          image: null,
+          status: 'running',
+          tracks_done: 0,
+          tracks_total: d.total_tracks || 0,
+          current_title: '',
+          code: null,
+        };
+      } else {
+        p.links[linkId].status = 'running';
+        // Always take the resolved name. The old guard compared against
+        // linkId.split('/').pop(), which keeps the "?si=..." query string,
+        // while the placeholder set in startJob() strips it — so the two never
+        // matched and the card kept showing the bare Spotify ID.
+        if (d.name) p.links[linkId].name = d.name;
+        if (d.total_tracks) {
+          p.links[linkId].tracks_total = d.total_tracks;
+        }
+      }
+      scheduleRender();
+      return;
     }
 
-    if (d.type === 'task.advance') {
-      if (bars[d.name]) bars[d.name].completed = d.completed;
-      renderBars();
+    if (d.type === 'link.complete') {
+      const p = ensureProvider(d.provider);
+      const linkId = d.link;
+      if (p.links[linkId]) {
+        p.links[linkId].status = d.code === 0 ? 'complete' : 'failed';
+        p.links[linkId].code = d.code;
+        if (d.name) p.links[linkId].name = d.name;
+      }
+      scheduleRender();
+      return;
     }
 
-    if (d.type === 'task.update' && bars[d.name]) {
-      bars[d.name].description = d.description;
-      renderBars();
+    // ── Full track list (Spotify metadata pre-fetch) ──
+    if (d.type === 'link.metadata') {
+      const p = ensureProvider(d.provider);
+      const linkId = d.link;
+      if (p.links[linkId] && d.tracks) {
+        p.links[linkId].tracks = d.tracks.map((t, i) => ({
+          ...t,
+          num: i + 1,
+          status: 'pending',
+        }));
+        p.links[linkId].tracks_total = d.tracks.length;
+        initTrackIndex(p.links[linkId]);
+        // Bump the signature so getTrackListEl() rebuilds with the full list
+        p.links[linkId]._trackSigSalt = (p.links[linkId]._trackSigSalt || 0) + 1;
+      }
+      syncAccordion();
+      return;
     }
 
+    // ── Track-level progress ──
+    if (d.type === 'track.progress' || d.type === 'track.log') {
+      const p = ensureProvider(d.provider);
+      const linkId = d.link;
+      if (!p.links[linkId]) {
+        p.links[linkId] = {
+          name: linkId.split('/').pop() || linkId,
+          image: null,
+          status: 'running',
+          tracks_done: 0,
+          tracks_total: 0,
+          current_title: '',
+          code: null,
+        };
+      }
+      const info = p.links[linkId];
+
+      // Subprocess output routed to this playlist's own log pane
+      if (d.event === 'log') {
+        pushPlaylistLog(d.provider, linkId, d.line);
+        return;
+      }
+
+      if (d.event === 'track') {
+        // "Downloading item X of Y" is the authoritative position for yt-dlp
+        // and scdl — trust it rather than a locally incremented counter.
+        info.tracks_total = d.total;
+        info._currentItem = d.current;
+        info.current_title = `Track ${d.current}/${d.total}`;
+        if (!info.tracks || !info.tracks.length) {
+          info.tracks = Array.from({length: d.total}, (_, i) => ({
+            num: i + 1, title: `Track ${i + 1}`, artists: [], status: 'pending'
+          }));
+          initTrackIndex(info);
+          info._trackSigSalt = (info._trackSigSalt || 0) + 1;
+        }
+        setTrackStatus(info, info.tracks[d.current - 1], 'downloading');
+      } else if (d.event === 'track_active') {
+        // Names the track currently in flight; not a completion.
+        const title = cleanTrackTitle(d.filename || '');
+        if (title) info.current_title = title;
+        const t = info.tracks && info._currentItem
+          ? info.tracks[info._currentItem - 1] : null;
+        if (t) {
+          if (isPlaceholder(t.title)) setTrackTitle(info, t, title);
+          setTrackStatus(info, t, 'downloading');
+        }
+      } else if (d.event === 'track_complete') {
+        const title = cleanTrackTitle(d.filename || d.title || '');
+        info.current_title = title;
+        if (info.tracks) {
+          // Resolution order, all O(1): authoritative item index -> title map
+          // -> the running "first still-pending" pointer. Previously each of
+          // these was an Array.find() over every track, making a full run
+          // O(tracks^2) — 3.5s for a 5.7k-track batch.
+          let target = info._currentItem ? info.tracks[info._currentItem - 1] : null;
+          if ((!target || target.status === 'downloaded') && title) {
+            const idx = lookupTrack(info, title);
+            if (idx !== undefined) target = info.tracks[idx];
+          }
+          if (!target || target.status === 'downloaded') target = nextPending(info);
+          if (target) {
+            if (isPlaceholder(target.title)) setTrackTitle(info, target, title);
+            setTrackStatus(info, target, 'downloaded');
+          }
+        }
+      } else if (d.event === 'searching') {
+        info.current_title = '🔍 ' + d.query;
+        if (info.tracks) {
+          const idx = lookupTrack(info, d.query);
+          if (idx !== undefined) setTrackStatus(info, info.tracks[idx], 'downloading');
+        }
+      } else if (d.event === 'tally') {
+        // spotdl's own "N/M complete" counter. Authoritative for the bar even
+        // when a title didn't resolve to a row in the list.
+        if (d.total) info.tracks_total = d.total;
+        info._tallyDone = d.done;
+      } else if (d.event === 'error') {
+        info.status = 'failed';
+      }
+
+      if (info.tracks && info.tracks.length && !info.tracks_total) {
+        info.tracks_total = info.tracks.length;
+      }
+      if (info._tallyDone !== undefined) {
+        info.tracks_done = Math.max(info._doneCount || 0, info._tallyDone);
+      }
+
+      // Patch only the rows whose status actually changed
+      updateTrackStatusDOM(d.provider, d.link, info);
+      scheduleRender();
+      return;
+    }
+
+    // ── Done ──
     if (d.type === 'done' || d.type === 'job.completed' || d.type === 'job.failed' || d.type === 'job.cancelled') {
-      es.close();
+      if (es) es.close();
+      syncAccordion();   // flush any pending debounced update
       document.getElementById('btn-start').disabled = false;
       document.getElementById('btn-cancel').disabled = true;
       const status = d.status || (d.type === 'job.completed' ? 'completed' : 'failed');
       document.getElementById('status-indicator').textContent = '● ' + status;
       document.getElementById('status-indicator').className = status === 'completed' ? 'status-idle' : 'status-error';
     }
-  });
-
-  function renderBars() {
-    progressEl.innerHTML = Object.entries(bars).map(([name, b]) => {
-      const pct = b.total > 0 ? Math.round(b.completed / b.total * 100) : 0;
-      const desc = b.description || name;
-      return `<div class="progress-row">
-        <span>${desc}</span>
-        <div class="progress-bar"><div class="fill" style="width:${pct}%">${pct}%</div></div>
-        <span>${b.completed}/${b.total}</span>
-      </div>`;
-    }).join('');
   }
 }
+
+// ── Render scheduling ──────────────────────────────────────────────────
+// syncAccordion() patches existing DOM in place, so it is cheap enough to
+// run on a short tick. Nothing is destroyed, so CSS animations never restart.
+let _renderTimer = null;
+function scheduleRender() {
+  if (_renderTimer) return;
+  _renderTimer = setTimeout(() => {
+    _renderTimer = null;
+    syncAccordion();
+  }, 120);
+}
+// Back-compat alias — older call sites expect renderAccordion()
+function renderAccordion() { syncAccordion(); }
+
+// ── Persistent DOM cache ───────────────────────────────────────────────
+// The previous implementation rebuilt the whole accordion with innerHTML on
+// every update. That recreated every card element, which (a) restarted the
+// cardSlideIn/badgePulse/shimmer CSS animations — the visible "flashing" —
+// and (b) defeated `transition: width` on progress bars, since transitions
+// never run on freshly-created nodes. We now build each node once and mutate
+// only the values that actually changed.
+const domCache = { providers: {} };      // provider -> {section, body, arrow, stats, badge, cards}
+const trackListCache = {};               // "provider|linkId" -> {el, sig}
+
+function setText(el, v) {
+  if (el && el.textContent !== v) el.textContent = v;
+}
+function setClass(el, v) {
+  if (el && el.className !== v) el.className = v;
+}
+function setWidth(el, pct) {
+  const w = pct + '%';
+  if (el && el.style.width !== w) el.style.width = w;
+}
+
+function resetLiveDOM() {
+  for (const k of Object.keys(domCache.providers)) delete domCache.providers[k];
+  for (const k of Object.keys(trackListCache)) delete trackListCache[k];
+  const root = document.getElementById('provider-accordion');
+  if (root) root.innerHTML = '';
+}
+
+// ── Track list (own cache; rebuilt only when its content signature changes) ──
+
+function trackSignature(info) {
+  const t = info.tracks || [];
+  // Length + per-status tally is enough to know whether a rebuild is needed;
+  // individual status flips are patched in place by updateTrackStatusDOM().
+  return t.length + ':' + (info._trackSigSalt || 0);
+}
+
+const TRACK_ICON = { downloaded: '✅', downloading: '🔄' };
+const TRACK_CLASS = { downloaded: 'track-done', downloading: 'track-active' };
+function trackIcon(s) { return TRACK_ICON[s] || '⏳'; }
+function trackClass(s) { return 'track-row ' + (TRACK_CLASS[s] || 'track-pending'); }
+
+// Builds the list and returns direct references to every mutable node, so
+// status updates never need a DOM query. Searching for rows by attribute
+// selector on each event was O(tracks x events) — the dominant cost for
+// long playlists.
+function buildTrackList(info) {
+  const tracks = info.tracks || [];
+  const el = mk('div', 'track-list');
+  const downloaded = tracks.filter(t => t.status === 'downloaded').length;
+  const header = mk('div', 'track-list-header', `Tracks (${downloaded}/${tracks.length})`);
+  el.appendChild(header);
+
+  const rows = {};
+  const frag = document.createDocumentFragment ? document.createDocumentFragment() : el;
+  for (const t of tracks) {
+    const row = mk('div', trackClass(t.status));
+    row.dataset.trackNum = t.num;
+    const iconEl = mk('span', 'track-icon', trackIcon(t.status));
+    const numEl = mk('span', 'track-num', t.num == null ? '' : String(t.num));
+    const titleEl = mk('span', 'track-title', t.title || '');
+    row.appendChild(iconEl);
+    row.appendChild(numEl);
+    row.appendChild(titleEl);
+    const artistStr = (t.artists || []).join(', ');
+    if (artistStr) row.appendChild(mk('span', 'track-artist', artistStr));
+    frag.appendChild(row);
+    rows[t.num] = { row, iconEl, titleEl };
+  }
+  if (frag !== el) el.appendChild(frag);
+  return { el, header, rows };
+}
+
+function getTrackListEl(provider, linkId, info) {
+  const key = provider + '|' + linkId;
+  const sig = trackSignature(info);
+  let entry = trackListCache[key];
+  if (!entry) {
+    entry = buildTrackList(info);
+    entry.sig = sig;
+    trackListCache[key] = entry;
+  } else if (entry.sig !== sig) {
+    const fresh = buildTrackList(info);
+    fresh.sig = sig;
+    if (entry.el.parentNode) entry.el.parentNode.replaceChild(fresh.el, entry.el);
+    trackListCache[key] = fresh;
+    entry = fresh;
+  }
+  return entry.el;
+}
+
+// Patch only the rows flagged dirty, via cached refs — no queries, no
+// rebuild, no animation restart, and no full-list scan per event.
+function updateTrackStatusDOM(provider, linkId, info) {
+  const entry = trackListCache[provider + '|' + linkId];
+  // Nothing rendered yet (list still collapsed) — state is kept in `info`
+  // and the DOM is built on first expand.
+  if (!entry || !info.tracks) return;
+
+  const dirty = info._dirty;
+  if (dirty && dirty.size) {
+    for (const num of dirty) {
+      const ref = entry.rows[num];
+      const t = info.tracks[num - 1];
+      if (!ref || !t) continue;
+      setClass(ref.row, trackClass(t.status));
+      setText(ref.iconEl, trackIcon(t.status));
+      if (t.title) setText(ref.titleEl, t.title);
+    }
+    dirty.clear();
+  }
+  setText(entry.header,
+    `Tracks (${info._doneCount || 0}/${info.tracks.length})`);
+}
+
+// ── Structure builders (run once per provider / per card) ──────────────
+
+// Explicit element construction — avoids an HTML parse per card and yields
+// direct node references, so no querySelector is needed on the hot path.
+function mk(tag, className, text) {
+  const el = document.createElement(tag);
+  if (className) el.className = className;
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+
+function ensureProviderSection(p) {
+  let entry = domCache.providers[p];
+  if (entry) return entry;
+
+  const root = document.getElementById('provider-accordion');
+  const placeholder = root.querySelector('.muted');
+  if (placeholder) placeholder.remove();
+
+  const section = mk('div', 'provider-section');
+  section.dataset.provider = p;
+
+  const header = mk('div', 'provider-header');
+  const arrow = mk('span', 'provider-arrow', '▼');
+  const icon = mk('span', 'provider-icon', PROVIDER_ICONS[p] || '📦');
+  const nameEl = mk('span', 'provider-name', p.toUpperCase());
+  const stats = mk('span', 'provider-stats', '');
+  const badge = mk('span', 'badge badge-pending', '');
+  header.appendChild(arrow);
+  header.appendChild(icon);
+  header.appendChild(nameEl);
+  header.appendChild(stats);
+  header.appendChild(badge);
+  header.addEventListener('click', () => toggleProvider(p));
+
+  const body = mk('div', 'provider-body');
+  body.dataset.providerBody = p;
+
+  section.appendChild(header);
+  section.appendChild(body);
+
+  // Keep providers in a stable visual order regardless of arrival order
+  const idx = PROVIDER_ORDER.indexOf(p);
+  let inserted = false;
+  for (const sib of Array.from(root.children)) {
+    const sIdx = PROVIDER_ORDER.indexOf(sib.dataset.provider);
+    if (sIdx > idx) { root.insertBefore(section, sib); inserted = true; break; }
+  }
+  if (!inserted) root.appendChild(section);
+
+  entry = { section, body, arrow, stats, badge, cards: {} };
+  domCache.providers[p] = entry;
+  return entry;
+}
+
+function ensureCard(provider, linkId) {
+  const pEntry = ensureProviderSection(provider);
+  let card = pEntry.cards[linkId];
+  if (card) return card;
+
+  const root = mk('div', 'playlist-card card-pending');
+  root.dataset.provider = provider;
+  root.dataset.link = linkId;
+
+  const headerRow = mk('div', 'card-header-row');
+  const expandIcon = mk('span', 'card-expand-icon', '');
+  const info = mk('div', 'card-info');
+  const nameEl = mk('div', 'card-name', '');
+  const subtitle = mk('div', 'card-subtitle', '');
+  const progress = mk('div', 'card-progress');
+  const barOuter = mk('div', 'progress-bar');
+  const fill = mk('div', 'fill', '');
+  fill.style.width = '0%';
+  const count = mk('span', 'card-count', '');
+
+  barOuter.appendChild(fill);
+  progress.appendChild(barOuter);
+  progress.appendChild(count);
+  info.appendChild(nameEl);
+  info.appendChild(subtitle);
+  info.appendChild(progress);
+  headerRow.appendChild(expandIcon);
+  headerRow.appendChild(info);
+  headerRow.addEventListener('click', () => toggleTracks(provider, linkId));
+
+  const actions = mk('div', 'card-actions');
+  const logBtn = mk('button', 'mini-btn', '📜 Log');
+  logBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    togglePlaylistLog(provider, linkId);
+  });
+  actions.appendChild(logBtn);
+
+  const logPane = mk('pre', 'card-log');
+  logPane.style.display = 'none';
+
+  root.appendChild(headerRow);
+  root.appendChild(actions);
+  root.appendChild(logPane);
+  pEntry.body.appendChild(root);
+
+  card = { root, headerRow, logPane, expandIcon, name: nameEl, subtitle, fill, count };
+  pEntry.cards[linkId] = card;
+  return card;
+}
+
+// ── Sync: patch values only ────────────────────────────────────────────
+
+function syncAccordion() {
+  const provs = liveState.providers;
+  const root = document.getElementById('provider-accordion');
+  if (!root) return;
+
+  if (!Object.keys(provs).length) {
+    if (!root.querySelector('.muted')) {
+      root.innerHTML = '<p class="muted">Waiting for downloads to start...</p>';
+    }
+    return;
+  }
+
+  for (const p of PROVIDER_ORDER) {
+    const data = provs[p];
+    if (!data) continue;
+
+    const pEntry = ensureProviderSection(p);
+    const links = Object.values(data.links);
+    const linkCount = links.length;
+    const running = links.filter(l => l.status === 'running').length;
+    const done = links.filter(l => l.status === 'complete').length;
+    const failed = links.filter(l => l.status === 'failed').length;
+    const pending = links.filter(l => l.status === 'pending').length;
+    const totalTracks = links.reduce((s, l) => s + (l.tracks_total || 0), 0);
+    const doneTracks = links.reduce(
+      (s, l) => s + (l.status === 'complete' ? (l.tracks_total || l.tracks_done || 0) : (l.tracks_done || 0)), 0);
+
+    const expanded = data.expanded !== false;
+    setText(pEntry.arrow, expanded ? '▼' : '▶');
+    if (pEntry.body.style.display !== (expanded ? '' : 'none')) {
+      pEntry.body.style.display = expanded ? '' : 'none';
+    }
+    setText(pEntry.stats, `${linkCount} playlist(s) · ${doneTracks}/${totalTracks || '?'} tracks`);
+
+    if (running > 0) {
+      setClass(pEntry.badge, 'badge badge-running');
+      setText(pEntry.badge, `${running} running`);
+    } else if (pending > 0) {
+      setClass(pEntry.badge, 'badge badge-pending');
+      setText(pEntry.badge, `${pending} queued`);
+    } else if (failed > 0 && done === 0) {
+      setClass(pEntry.badge, 'badge badge-failed');
+      setText(pEntry.badge, `${failed} failed`);
+    } else {
+      setClass(pEntry.badge, 'badge badge-ok');
+      setText(pEntry.badge, `${done}/${linkCount} done`);
+    }
+
+    for (const [linkId, info] of Object.entries(data.links)) {
+      const card = ensureCard(p, linkId);
+      const tracks = info.tracks || [];
+      const hasTracks = tracks.length > 0;
+      // Track lists start collapsed and their rows are only built on first
+      // expand. Rendering every track up front cost ~28k DOM nodes for a
+      // 5.7k-track batch, which is what made big runs feel heavy.
+      const cardExpanded = info.expanded === true;
+
+      const pct = info.tracks_total > 0
+        ? Math.min(100, Math.round((info.tracks_done || 0) / info.tracks_total * 100))
+        : (info.status === 'complete' ? 100 : 0);
+
+      const statusClass = info.status === 'complete' ? 'card-complete'
+        : info.status === 'failed' ? 'card-failed'
+        : info.status === 'pending' ? 'card-pending'
+        : 'card-running';
+      const statusLabel = info.status === 'complete' ? '✅ Done'
+        : info.status === 'failed' ? '❌ Failed'
+        : info.status === 'pending' ? '⏸ Queued'
+        : '⏳ Downloading...';
+
+      setClass(card.root, 'playlist-card ' + statusClass);
+      setText(card.expandIcon, hasTracks ? (cardExpanded ? '▼' : '▶') : '');
+      card.headerRow.style.cursor = hasTracks ? 'pointer' : '';
+      card.headerRow.title = hasTracks
+        ? (cardExpanded ? 'Hide tracks' : `Show ${tracks.length} tracks`) : '';
+      setText(card.name, '🎵 ' + (info.name || linkId));
+      if (card.name.title !== linkId) card.name.title = linkId;
+      let sub = statusLabel + (info.current_title ? ' — ' + info.current_title : '');
+      if (hasTracks && !cardExpanded) sub += `  ·  ${tracks.length} tracks ▸`;
+      setText(card.subtitle, sub);
+      setWidth(card.fill, pct);
+      setText(card.fill, pct > 10 ? pct + '%' : '');
+      setText(card.count, `${info.tracks_done || 0}/${info.tracks_total || '?'}`);
+
+      // Build/attach the track list only once the card is expanded
+      if (hasTracks && cardExpanded) {
+        const listEl = getTrackListEl(p, linkId, info);
+        if (listEl.parentNode !== card.root) card.root.appendChild(listEl);
+        if (listEl.style.display !== 'block') listEl.style.display = 'block';
+      }
+    }
+  }
+}
+
+// ── Toggles (pure style changes — no rebuild) ──────────────────────────
+
+function toggleProvider(p) {
+  const data = liveState.providers[p];
+  if (!data) return;
+  data.expanded = data.expanded === false;
+  const entry = domCache.providers[p];
+  if (entry) {
+    setText(entry.arrow, data.expanded ? '▼' : '▶');
+    entry.body.style.display = data.expanded ? '' : 'none';
+  }
+}
+
+function toggleTracks(provider, linkId) {
+  const p = liveState.providers[provider];
+  if (!p || !p.links[linkId]) return;
+  const info = p.links[linkId];
+  if (!(info.tracks || []).length) return;
+  info.expanded = info.expanded !== true;
+
+  const card = domCache.providers[provider] && domCache.providers[provider].cards[linkId];
+  if (!card) return;
+  setText(card.expandIcon, info.expanded ? '▼' : '▶');
+
+  if (info.expanded) {
+    // First expand builds the rows; afterwards it is a style toggle
+    const listEl = getTrackListEl(provider, linkId, info);
+    if (listEl.parentNode !== card.root) card.root.appendChild(listEl);
+    listEl.style.display = 'block';
+    // Sync any status changes that landed while the list was collapsed
+    if (info._dirty) info._dirty.clear();
+  } else {
+    const entry = trackListCache[provider + '|' + linkId];
+    if (entry && entry.el.parentNode) entry.el.style.display = 'none';
+  }
+  // Refresh the header text (the "N tracks" hint only shows when collapsed).
+  // Patching in place costs well under a millisecond.
+  syncAccordion();
+}
+
+function handleCardClick(e) {
+  const card = e.currentTarget.closest && e.currentTarget.closest('.playlist-card');
+  if (card) toggleTracks(card.dataset.provider, card.dataset.link);
+}
+
+function togglePlaylistLog(provider, linkId) {
+  const p = liveState.providers[provider];
+  if (!p || !p.links[linkId]) return;
+  const info = p.links[linkId];
+  info.logsOpen = !info.logsOpen;
+
+  const card = domCache.providers[provider] && domCache.providers[provider].cards[linkId];
+  if (!card) return;
+  if (info.logsOpen) {
+    card.logPane.textContent = (info.logs || []).join('\n');
+    card.logPane.style.display = 'block';
+    card.logPane.scrollTop = card.logPane.scrollHeight;
+  } else {
+    card.logPane.style.display = 'none';
+  }
+}
+
+// Fast HTML escape — the DOM-element approach allocated a node per call,
+// which was thousands of allocations per track-list build.
+const _ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => _ESC[c]);
+}
+
 
 // ── Load files ──
 async function loadFiles() {

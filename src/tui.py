@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import Any, Dict, List
 
 try:
     from rich.console import Console
@@ -50,6 +50,22 @@ class DownloadProgress:
     def stop(self) -> None:
         if self._progress:
             self._progress.stop()
+
+    def link_started(self, provider: str, link: str, name: str, total_tracks: int = 0) -> None:
+        """Called when a single link begins downloading. No-op in CLI TUI."""
+        pass
+
+    def link_complete(self, provider: str, link: str, name: str, code: int) -> None:
+        """Called when a single link finishes downloading. No-op in CLI TUI."""
+        pass
+
+    def track_progress(self, provider: str, link: str, event: str, data: Dict[str, Any]) -> None:
+        """Called for per-track progress events from subprocess output. No-op in CLI TUI."""
+        pass
+
+    def link_metadata(self, provider: str, link: str, tracks: List[Dict[str, Any]]) -> None:
+        """Provide the full track list for a playlist (e.g. from Spotify API). No-op in CLI TUI."""
+        pass
 
     def __enter__(self) -> "DownloadProgress":
         self.start()

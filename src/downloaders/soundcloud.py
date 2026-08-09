@@ -1,17 +1,19 @@
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 from src.downloaders.base import BaseDownloader
 from src.models import Song
 
 
 class SoundCloudDownloader(BaseDownloader):
-    def download(self, link: str) -> Tuple[int, Path]:
+    def download(self, link: str,
+                 on_progress: Callable[[str, Dict[str, Any]], None] | None = None
+                 ) -> Tuple[int, Path]:
         """Download SoundCloud link via scdl CLI."""
         cmd = [
             "scdl",
             "-l", link,
-            "--path", str(self.output_dir),
+            "--path", str(self.output_dir.resolve()),
             "--playlist-name-format", "%(playlist)s/%(playlist_index)04d %(uploader)s - %(title)s.%(ext)s",
             "--onlymp3",
             "--original-art",
@@ -19,7 +21,7 @@ class SoundCloudDownloader(BaseDownloader):
             "--debug",
             "--yt-dlp-args", "--write-info-json --ignore-errors --no-abort-on-error --yes-playlist --embed-thumbnail --audio-quality 1",
         ]
-        return self._download("scdl", link, cmd)
+        return self._download("scdl", link, cmd, on_progress=on_progress)
 
     def cleanup(self, playlist_name: str) -> List[Song]:
         """Cleanup metadata and scan for missing tracks across all playlists."""

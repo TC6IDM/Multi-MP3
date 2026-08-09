@@ -1,12 +1,14 @@
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 from src.downloaders.base import BaseDownloader
 from src.models import Song
 
 
 class YouTubeDownloader(BaseDownloader):
-    def download(self, link: str) -> Tuple[int, Path]:
+    def download(self, link: str,
+                 on_progress: Callable[[str, Dict[str, Any]], None] | None = None
+                 ) -> Tuple[int, Path]:
         """Download YouTube playlist/channel via yt-dlp."""
         cmd = [
             "yt-dlp",
@@ -22,7 +24,7 @@ class YouTubeDownloader(BaseDownloader):
             "--output", "%(playlist_title)s/%(playlist_index)02d %(uploader)s - %(title)s.%(ext)s",
             link,
         ]
-        return self._download("yt-dlp", link, cmd)
+        return self._download("yt-dlp", link, cmd, on_progress=on_progress)
 
     def cleanup(self, playlist_name: str) -> List[Song]:
         """Cleanup metadata and scan for missing tracks across all playlists."""

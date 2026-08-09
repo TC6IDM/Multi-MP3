@@ -11,17 +11,17 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, Form
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
-    JSONResponse,
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
 
-from src.utils import clean_url, get_spotify_creds, read_links, setup_logging
+from src.utils import clean_url, get_spotify_creds, read_links
 from src.coordinator import Coordinator
+from src.event_bus import EventBus
 from src.web_progress import WebProgress
 from src.web_handler import SSELogHandler
 from src.job_manager import JobManager
@@ -36,7 +36,7 @@ templates_dir = Path(__file__).parent / "templates"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-DEFAULT_OUTPUT = Path(os.getenv("OUTPUT_DIR", "downloads"))
+DEFAULT_OUTPUT = Path(os.getenv("OUTPUT_DIR", "downloads")).resolve()
 DEFAULT_LINKS = Path(os.getenv("LINKS_FILE", "links.txt"))
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -69,43 +69,37 @@ def parse_link_text(text: str) -> List[str]:
 
 def run_download_job(job_id: str, links: List[str], providers: List[str],
                      parallel: bool, output_dir: Path,
-                     event_queue: asyncio.Queue) -> None:
+                     bus: EventBus) -> None:
     """Background thread: run coordinator and push lifecycle events."""
     mgr = JobManager()
 
     # Setup logging with SSE handler
     logger = logging.getLogger(f"job_{job_id}")
     logger.setLevel(logging.INFO)
-    sse_handler = SSELogHandler(event_queue)
-    logger.addHandler(sse_handler)
-    # Also keep console output
+    logger.handlers.clear()  # Avoid duplicate handlers on repeat runs
+    logger.propagate = False
+    logger.addHandler(SSELogHandler(bus))
     logger.addHandler(logging.StreamHandler())
 
-    # Push job.started
-    try:
-        event_queue.put_nowait(json.dumps({
-            "type": "job.started", "job_id": job_id
-        }))
-    except asyncio.QueueFull:
-        pass
+    bus.push(json.dumps({"type": "job.started", "job_id": job_id}))
 
     try:
         client_id, client_secret = get_spotify_creds(logger)
     except ValueError:
         logger.error("Missing Spotify credentials")
         mgr.complete_job(1)
-        event_queue.put_nowait(json.dumps({
-            "type": "job.failed", "job_id": job_id, "error": "Missing Spotify credentials"
+        bus.push(json.dumps({
+            "type": "job.failed", "job_id": job_id,
+            "error": "Missing Spotify credentials",
         }))
         return
 
     # Write links to temp file
     input_file = output_dir / ".web" / f"input_{job_id}.txt"
     input_file.parent.mkdir(parents=True, exist_ok=True)
-    input_file.write_text("\n".join(links))
+    input_file.write_text("\n".join(links), encoding="utf-8")
 
-    # Create web progress
-    web_progress = WebProgress(event_queue)
+    web_progress = WebProgress(bus)
 
     coord = Coordinator(
         output_dir, logger, client_id, client_secret,
@@ -120,15 +114,11 @@ def run_download_job(job_id: str, links: List[str], providers: List[str],
 
     mgr.complete_job(exit_code)
 
-    event_data = {
+    bus.push(json.dumps({
         "type": "job.completed" if exit_code == 0 else "job.failed",
         "job_id": job_id,
         "exit_code": exit_code,
-    }
-    try:
-        event_queue.put_nowait(json.dumps(event_data))
-    except asyncio.QueueFull:
-        pass
+    }))
 
 
 # ── Pages ────────────────────────────────────────────────────────────
@@ -213,14 +203,23 @@ async def api_create_job(data: Dict[str, Any]):
     providers = data.get("providers", ["soundcloud", "youtube", "spotify"])
     parallel = data.get("parallel", True)
 
+    # Group links by provider so frontend can pre-render all cards
+    links_by_provider: Dict[str, List[str]] = {"spotify": [], "youtube": [], "soundcloud": []}
+    for link in links:
+        if "spotify.com" in link:
+            links_by_provider["spotify"].append(link)
+        elif "soundcloud.com" in link:
+            links_by_provider["soundcloud"].append(link)
+        elif "youtube.com" in link or "youtu.be" in link:
+            links_by_provider["youtube"].append(link)
+
     job = mgr.create_job(links, providers, parallel)
 
-    # SSE event queue — ring buffer of last 500 events
-    event_queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+    # Thread-safe event bus (asyncio.Queue is unsafe across threads)
+    bus = EventBus(maxlen=2000)
 
-    # Store queue so SSE endpoint can find it
-    app.state.queues = getattr(app.state, "queues", {})
-    app.state.queues[job.job_id] = event_queue
+    app.state.buses = getattr(app.state, "buses", {})
+    app.state.buses[job.job_id] = bus
 
     # Set history path
     mgr.set_history_path(DEFAULT_OUTPUT / ".web" / "jobs.json")
@@ -228,12 +227,17 @@ async def api_create_job(data: Dict[str, Any]):
     # Launch in background thread
     thread = threading.Thread(
         target=run_download_job,
-        args=(job.job_id, links, providers, parallel, DEFAULT_OUTPUT, event_queue),
+        args=(job.job_id, links, providers, parallel, DEFAULT_OUTPUT, bus),
         daemon=True,
     )
     thread.start()
 
-    return {"job_id": job.job_id, "status": "running", "links": len(links)}
+    return {
+        "job_id": job.job_id,
+        "status": "running",
+        "links": links_by_provider,
+        "total_links": len(links),
+    }
 
 
 @app.get("/api/jobs")
@@ -263,44 +267,53 @@ async def api_cancel_job(job_id: str):
 
 @app.get("/api/jobs/{job_id}/events")
 async def api_job_events(job_id: str) -> StreamingResponse:
-    """SSE stream of real-time job events."""
-    queues: Dict[str, asyncio.Queue] = getattr(app.state, "queues", {})
-    queue = queues.get(job_id)
-    if queue is None:
-        # Job may have completed — return empty stream
+    """SSE stream of real-time job events.
+
+    Drains the thread-safe EventBus in batches on a fixed tick rather than
+    awaiting one event at a time — this collapses bursty subprocess output
+    into far fewer network writes and browser wakeups.
+    """
+    buses: Dict[str, EventBus] = getattr(app.state, "buses", {})
+    bus = buses.get(job_id)
+    if bus is None:
         async def empty():
-            yield f"data: {json.dumps({'type': 'done', 'reason': 'no queue'})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'reason': 'no stream'})}\n\n"
         return StreamingResponse(empty(), media_type="text/event-stream")
 
-    # Ring buffer — store last 200 events for replay
-    ring: List[str] = []
-    ring_max = 200
-
     async def event_stream() -> AsyncGenerator[str, None]:
-        # Replay ring buffer first
-        for item in ring:
-            yield f"data: {item}\n\n"
+        mgr = JobManager()
+        idle_ticks = 0
+        TICK = 0.2          # seconds between drains
+        PING_AFTER = 75     # ~15s of idle ticks before a keepalive
 
-        while True:
-            try:
-                data = await asyncio.wait_for(queue.get(), timeout=15.0)
-                ring.append(data)
-                if len(ring) > ring_max:
-                    ring.pop(0)
-                yield f"data: {data}\n\n"
-            except asyncio.TimeoutError:
-                yield f"data: {json.dumps({'type': 'ping'})}\n\n"
+        try:
+            while True:
+                batch = bus.drain(limit=200)
 
-            # Check if job is done
-            mgr = JobManager()
-            job = mgr.get_job(job_id)
-            if job and job.status in ("completed", "failed", "cancelled"):
-                yield f"data: {json.dumps({'type': 'done', 'status': job.status})}\n\n"
-                break
+                if batch:
+                    idle_ticks = 0
+                    # Coalesce the batch into a single network write
+                    yield "".join(f"data: {item}\n\n" for item in batch)
+                else:
+                    idle_ticks += 1
+                    if idle_ticks >= PING_AFTER:
+                        idle_ticks = 0
+                        yield f"data: {json.dumps({'type': 'ping'})}\n\n"
 
-        # Cleanup queue
-        if job_id in queues:
-            del queues[job_id]
+                    # Only check job status when the bus is quiet
+                    job = mgr.get_job(job_id)
+                    if job and job.status in ("completed", "failed", "cancelled"):
+                        # Flush anything that landed during the check
+                        tail = bus.drain(limit=500)
+                        if tail:
+                            yield "".join(f"data: {item}\n\n" for item in tail)
+                        yield f"data: {json.dumps({'type': 'done', 'status': job.status})}\n\n"
+                        break
+
+                await asyncio.sleep(TICK)
+        finally:
+            bus.close()
+            buses.pop(job_id, None)
 
     return StreamingResponse(
         event_stream(),

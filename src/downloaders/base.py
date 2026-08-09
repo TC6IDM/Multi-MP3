@@ -1,15 +1,30 @@
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+import logging
 from logging import Logger
 from pathlib import Path
 import re
-from typing import List, Tuple
+from typing import Callable, List, Tuple, Dict, Any
 import json
 import os
 import subprocess
+import threading
 import psutil
 from src.models import Song, Playlist
+
+# High-frequency subprocess output that must never reach the SSE stream.
+# yt-dlp/scdl emit percentage + ETA lines many times per second per download;
+# forwarding them floods the browser and freezes the log pane.
+_NOISE = re.compile(
+    r'\[download\]\s+\d+\.?\d*%'          # yt-dlp percentage ticks
+    r'|ETA\s+\d'                           # ETA updates
+    r'|\d+\.?\d*(?:Ki|Mi|Gi)?B/s'          # transfer-rate updates
+    r'|frame=\s*\d+'                       # ffmpeg progress
+    r'|size=\s*\d+'                        # ffmpeg size updates
+    r'|\r'                                 # carriage-return redraws
+)
+
 
 class BaseDownloader(ABC):
     def __init__(self, output_dir: Path, logger: Logger):
@@ -19,8 +34,14 @@ class BaseDownloader(ABC):
         self.errors_dir.mkdir(parents=True, exist_ok=True)
 
     @abstractmethod
-    def download(self, link: str) -> Tuple[int, Path]:
-        """Return (return_code, errors_file)."""
+    def download(self, link: str,
+                 on_progress: Callable[[str, Dict[str, Any]], None] | None = None
+                 ) -> Tuple[int, Path]:
+        """Return (return_code, errors_file).
+
+        `on_progress` is passed per call rather than stored on the instance so
+        that one downloader can safely serve concurrent links.
+        """
         raise NotImplementedError
 
 
@@ -33,13 +54,49 @@ class BaseDownloader(ABC):
         """Fetch playlist name from metadata image URL."""
         raise NotImplementedError
     
-    def _download(self, name: str, link: str, cmd: List[str], _errors_file: Path | None = None) -> Tuple[int, Path]:
+    def _download(self, name: str, link: str, cmd: List[str],
+                  _errors_file: Path | None = None,
+                  on_progress: Callable[[str, Dict[str, Any]], None] | None = None) -> Tuple[int, Path]:
 
         errors_file = self.errors_dir / f"errors-{name}-{datetime.now().strftime('%Y%m%d%H%M%S%f')}.txt" if not _errors_file else _errors_file
 
         self.logger.info(f"🎵 {name}: {link.split('?')[0]}")
         self.logger.info(f"📁 → {self.output_dir}")
-        self.logger.debug(f"Command: {' '.join(cmd)}")
+
+        # Per-call callback keeps this instance safe for concurrent links
+        cb = on_progress
+
+        # Track-level progress patterns.
+        # yt-dlp prints "Destination:" TWICE per track — once for the video
+        # container ([download] ... .webm) and again after audio extraction
+        # ([ExtractAudio] ... .mp3). Counting both double-counted every track
+        # (progress read 41/40) and pushed titles out of alignment, so only the
+        # final audio destination is treated as completion.
+        re_yt_item = re.compile(r'\[download\]\s+Downloading item (\d+) of (\d+)')
+        re_yt_done = re.compile(
+            r'\[ExtractAudio\]\s+Destination:\s+(.+)'
+            r'|\[download\]\s+(.+?)\s+has already been downloaded'
+        )
+        re_yt_dest_intermediate = re.compile(r'\[download\]\s+Destination:\s+(.+)')
+        re_scdl_track = re.compile(r'\[(\d+)/(\d+)\].*Downloading')
+        # spotdl titles can still arrive without a closing quote if any TUI
+        # wrapping occurs, so the closing quote is optional and a trailing
+        # "  module.py:123" suffix (Rich's log location column) is trimmed.
+        re_spotdl_done = re.compile(r'Downloaded\s+"([^"]*?)(?:"|\s{2,}\S+\.py:\d+|$)')
+        re_spotdl_skip = re.compile(
+            r'"([^"]*?)"\s+(?:is\s+)?already\s+(?:downloaded|exists)'
+            r'|Skipping\s+(.+?)\s+\(file already exists\)'
+        )
+        re_spotdl_search = re.compile(r'Searching for\s+"([^"]*?)(?:"|\s{2,}\S+\.py:\d+|$)')
+        # --simple-tui emits per-song status lines ("Artist - Title: Downloading")
+        # and a running tally ("7/23 complete"). Deliberately excludes ": Done",
+        # because spotdl also prints `Downloaded "..."` for the same track and
+        # counting both would advance progress twice.
+        re_spotdl_active = re.compile(
+            r'^\s*(.+?):\s+(?:Searching for song|Getting audio meta|Downloading'
+            r'|Embedding metadata|Converting)\s*$'
+        )
+        re_spotdl_tally = re.compile(r'^\s*(\d+)/(\d+)\s+complete\s*$')
 
         env = os.environ.copy()
         try:
@@ -47,6 +104,11 @@ class BaseDownloader(ABC):
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
             def _reader(pipe, logger):
+                # Hoist attribute lookups out of the loop — this runs once per
+                # subprocess line, tens of thousands of times per playlist.
+                debug_on = logger.isEnabledFor(logging.DEBUG)
+                log_debug = logger.debug
+                noise_search = _NOISE.search
                 try:
                     for raw in iter(pipe.readline, ''):
                         if raw is None:
@@ -56,12 +118,71 @@ class BaseDownloader(ABC):
                             continue
                         if 'DEBUG' in line:
                             continue
-                        logger.info(line)
+
+                        # Drop high-frequency progress noise — yt-dlp/scdl emit
+                        # percentage lines many times per second per download.
+                        # These would flood the SSE stream and the browser DOM.
+                        if noise_search(line):
+                            if debug_on:
+                                log_debug(line)
+                            continue
+
+                        # Subprocess output goes to file/console at DEBUG so the
+                        # INFO-level SSE handler doesn't duplicate it — the web UI
+                        # receives it via cb("log") routed to the owning playlist.
+                        if debug_on:
+                            log_debug(line)
+                        if cb:
+                            cb("log", {"line": line[:400]})
+
+                        # Parse progress for web UI
+                        if cb and line:
+                            m = re_yt_item.search(line)
+                            if m:
+                                cb("track", {"total": int(m.group(2)), "current": int(m.group(1))})
+                                continue
+                            m = re_scdl_track.search(line)
+                            if m:
+                                cb("track", {"total": int(m.group(2)), "current": int(m.group(1))})
+                                continue
+                            m = re_yt_done.search(line)
+                            if m:
+                                filename = m.group(1) or m.group(2) or ""
+                                cb("track_complete", {"filename": filename.strip()})
+                                continue
+                            # Intermediate container destination — names the
+                            # track now in flight but is NOT a completion.
+                            m = re_yt_dest_intermediate.search(line)
+                            if m:
+                                cb("track_active", {"filename": m.group(1).strip()})
+                                continue
+                            m = re_spotdl_done.search(line)
+                            if m:
+                                cb("track_complete", {"title": m.group(1).strip()})
+                                continue
+                            m = re_spotdl_skip.search(line)
+                            if m:
+                                title = (m.group(1) or m.group(2) or "").strip()
+                                cb("track_complete", {"title": title})
+                                continue
+                            m = re_spotdl_search.search(line)
+                            if m:
+                                cb("searching", {"query": m.group(1).strip()})
+                                continue
+                            m = re_spotdl_tally.search(line)
+                            if m:
+                                cb("tally", {"done": int(m.group(1)),
+                                             "total": int(m.group(2))})
+                                continue
+                            m = re_spotdl_active.search(line)
+                            if m:
+                                cb("searching", {"query": m.group(1).strip()})
+                                continue
                 except Exception:
                     pass
 
-            from threading import Thread
-            reader = Thread(target=_reader, args=(proc.stdout, self.logger), daemon=True)
+            reader = threading.Thread(target=_reader, args=(proc.stdout, self.logger), daemon=True,
+                                      name=f"reader-{name}")
             reader.start()
 
             try:
@@ -70,6 +191,8 @@ class BaseDownloader(ABC):
                 self._kill_process_tree(proc)
                 reader.join(timeout=5)
                 self.logger.warning(f"⏰ {name} timeout (1h)")
+                if cb:
+                    cb("error", {"message": "timeout (1h)"})
                 return 1, errors_file
 
             reader.join()
@@ -81,6 +204,8 @@ class BaseDownloader(ABC):
             return proc.returncode, errors_file
         except Exception as e:
             self.logger.error(f"💥 {name} error: {e}")
+            if cb:
+                cb("error", {"message": str(e)})
             return 1, errors_file
 
     @staticmethod
