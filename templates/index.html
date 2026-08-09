@@ -503,9 +503,11 @@ function handleLiveEvent(d, es) {
           if (idx !== undefined) setTrackStatus(info, info.tracks[idx], 'downloading');
         }
       } else if (d.event === 'track_failed') {
-        // spotdl identifies the failure by Spotify track id
-        const idx = d.track_id !== undefined && info._idIndex
-          ? info._idIndex.get(d.track_id) : undefined;
+        // Failures arrive either keyed by Spotify id (end-of-run summary) or
+        // by title only ("No results found for song: X").
+        let idx;
+        if (d.track_id && info._idIndex) idx = info._idIndex.get(d.track_id);
+        if (idx === undefined && d.title) idx = lookupTrack(info, d.title);
         const target = idx !== undefined ? info.tracks[idx] : null;
         if (target) {
           target.error = d.error || 'Download failed';
@@ -536,6 +538,17 @@ function handleLiveEvent(d, es) {
     // ── Done ──
     if (d.type === 'done' || d.type === 'job.completed' || d.type === 'job.failed' || d.type === 'job.cancelled') {
       if (es) es.close();
+      // Belt and braces: resolve every remaining spinner. link.complete
+      // normally does this per playlist, but if one is ever missed (dropped
+      // event, cancelled run) the job ending must still settle the UI.
+      for (const [prov, pdata] of Object.entries(liveState.providers)) {
+        for (const [lk, info] of Object.entries(pdata.links)) {
+          if (info.status === 'running' || info.status === 'pending') {
+            info.status = d.type === 'job.completed' ? 'complete' : 'failed';
+          }
+          finalizeTrackStates(prov, lk, info);
+        }
+      }
       syncAccordion();   // flush any pending debounced update
       document.getElementById('btn-start').disabled = false;
       document.getElementById('btn-cancel').disabled = true;

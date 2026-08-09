@@ -103,6 +103,12 @@ class BaseDownloader(ABC):
         re_spotdl_fail = re.compile(
             r'https?://open\.spotify\.com/track/([A-Za-z0-9]+)\S*\s*-\s*(.+)'
         )
+        # spotdl also fails without ever naming a Spotify URL, e.g.
+        #   LookupError: No results found for song: SHAKING - CARBONE
+        # Here the song title is the only handle we get.
+        re_spotdl_notfound = re.compile(
+            r'(?:LookupError:\s*)?No results found for song:\s*(.+?)\s*$'
+        )
 
         env = os.environ.copy()
         try:
@@ -169,6 +175,11 @@ class BaseDownloader(ABC):
                             if m:
                                 cb("track_failed", {"track_id": m.group(1),
                                                     "error": m.group(2).strip()[:200]})
+                                continue
+                            m = re_spotdl_notfound.search(line)
+                            if m:
+                                cb("track_failed", {"title": m.group(1).strip(),
+                                                    "error": "No match found on YouTube"})
                                 continue
                             m = re_spotdl_done.search(line)
                             if m:

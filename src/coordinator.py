@@ -89,9 +89,16 @@ class Coordinator:
         total_tracks = 0
         track_list: List[Dict[str, Any]] = []
         if provider == "spotify":
+            # Name resolution and track-list parsing are kept in separate try
+            # blocks. They used to share one, so a failure midway (pagination
+            # returning HTTP 400, for instance) discarded the entire track list
+            # and the playlist rendered with no expandable songs.
             try:
                 playlist_name = downloader.fetch_metadata_image(link) or short_link
-                # Read track count + track list from saved metadata JSON
+            except Exception as e:
+                self.logger.warning(f"Spotify metadata fetch failed: {e}")
+
+            try:
                 safe_name = "".join(
                     c for c in playlist_name if c.isalnum() or c in (' ', '-', '_')
                 ).rstrip()
@@ -102,22 +109,28 @@ class Coordinator:
                     # Normalize: Spotify wraps playlist tracks in .track, albums are direct
                     raw_items = meta.get("tracks", {}).get("items", [])
                     total_tracks = meta.get("tracks", {}).get("total", len(raw_items))
-                    for item in raw_items:
-                        t = item.get("track", item)  # playlist → .track, album → direct
+                    for pos, item in enumerate(raw_items, 1):
+                        t = item.get("track") or item  # playlist → .track, album → direct
+                        if not isinstance(t, dict):
+                            continue
                         track_list.append({
-                            "num": t.get("track_number", 0),
+                            # Playlist position, not the album track number —
+                            # the latter repeats across albums (1, 1, 1, 3, ...).
+                            "num": pos,
                             "title": t.get("name", ""),
-                            "artists": [a.get("name", "") for a in t.get("artists", [])],
+                            "artists": [a.get("name", "") for a in t.get("artists", []) if a],
                             "duration_ms": t.get("duration_ms", 0),
                             # spotdl reports failures by Spotify track URL, so
                             # the id is what lets us mark the right row failed.
                             # Local files added to a playlist have no id.
                             "id": t.get("id") or "",
-                            "local": bool(t.get("is_local")),
+                            "local": bool(item.get("is_local") or t.get("is_local")),
                         })
-                    self.logger.info(f"📊 {playlist_name}: {total_tracks} tracks")
+                    self.logger.info(
+                        f"📊 {playlist_name}: {total_tracks} tracks "
+                        f"({len(track_list)} listed)")
             except Exception as e:
-                self.logger.warning(f"Metadata pre-fetch failed: {e}")
+                self.logger.warning(f"Track list parse failed: {e}")
 
         # Emit link started with real name + track count when available
         self.tui.link_started(provider, link, playlist_name, total_tracks)

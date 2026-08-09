@@ -118,32 +118,42 @@ class SpotifyDownloader(BaseDownloader):
         sp_id = url.rstrip("/").split("/")[-1].split("?")[0]
         sp = spotipy_lib.Spotify(client_credentials_manager=self.client_credentials_manager)
 
-        # Determine fetch method — playlists vs albums have different APIs
+        # `market` is deliberately omitted: "from_token" requires a user token,
+        # and with the client-credentials flow Spotify rejects it with HTTP 400.
+        # That error used to abort the whole metadata fetch, leaving the UI with
+        # no track list at all for any playlist over 100 tracks.
+        fields = ("items(is_local,track(id,name,artists(name),track_number,"
+                  "duration_ms,external_urls))," "total")
+
         is_playlist = "playlist" in url
         offset = len(items)
         while offset < total:
-            if is_playlist:
-                page = sp.playlist_tracks(
-                    sp_id, limit=100, offset=offset,
-                    fields="items(track(name,artists(name),track_number,duration_ms,external_urls)),total",
-                    market="from_token",
-                )
-            else:
-                page = sp.album_tracks(
-                    sp_id, limit=50, offset=offset,
-                    market="from_token",
-                )
+            try:
+                if is_playlist:
+                    page = sp.playlist_items(
+                        sp_id, limit=100, offset=offset,
+                        fields=fields, additional_types=("track",),
+                    )
+                else:
+                    page = sp.album_tracks(sp_id, limit=50, offset=offset)
+            except Exception as e:
+                # Keep whatever we already have rather than losing everything
+                self.logger.warning(
+                    f"Pagination stopped at {len(items)}/{total}: {e}")
+                break
 
             page_items = page.get("items", [])
             if not page_items:
                 break
             items.extend(page_items)
             offset += len(page_items)
-            self.logger.debug(f"  Fetched {len(items)}/{total} tracks")
 
         tracks["items"] = items
         out["tracks"] = tracks
-        self.logger.info(f"📊 All {len(items)} tracks retrieved")
+        if len(items) >= total:
+            self.logger.info(f"📊 All {len(items)} tracks retrieved")
+        else:
+            self.logger.warning(f"📊 Retrieved {len(items)} of {total} tracks")
 
     def _use_correct_config(self, link: str) -> str:
         """
