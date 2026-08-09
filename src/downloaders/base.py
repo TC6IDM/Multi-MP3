@@ -233,6 +233,91 @@ class BaseDownloader(ABC):
                 cb("error", {"message": str(e)})
             return 1, errors_file
 
+    # Characters Windows forbids in filenames; spotdl strips these too, so
+    # matching its behaviour keeps recovered files alongside the rest.
+    _BAD_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+    def search_and_download(self, title: str, artists: List[str],
+                            playlist_dir: str, position: int | None = None,
+                            padding: int = 2, timeout: int = 600) -> bool:
+        """Last-resort recovery for a single track.
+
+        spotdl picks a YouTube match itself and gives up if that one URL fails,
+        so a track can be unavailable purely because of the candidate it chose.
+        Searching YouTube directly often finds a working alternative.
+
+        Returns True if a file was produced.
+        """
+        artist_str = ", ".join(a for a in artists if a)
+        query = f"{artist_str} {title}".strip() if artist_str else title.strip()
+        if not query:
+            return False
+
+        stem = f"{title} - {artist_str}" if artist_str else title
+        if position:
+            stem = f"{position:0{padding}d} {stem}"
+        stem = self._BAD_FILENAME.sub("_", stem).strip()
+
+        out_dir = self.output_dir / playlist_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
+        target = out_dir / f"{stem}.mp3"
+        if target.exists():
+            return True   # another attempt already recovered it
+
+        cmd = [
+            "yt-dlp",
+            "--extract-audio", "--audio-format", "mp3",
+            "--audio-quality", "1",
+            "--embed-thumbnail", "--add-metadata",
+            "--js-runtimes", "deno",
+            "--no-playlist", "--no-warnings",
+            "--ignore-errors", "--no-abort-on-error",
+            "--output", str(out_dir / f"{stem}.%(ext)s"),
+            f"ytsearch1:{query}",
+        ]
+
+        self.logger.info(f"🔁 Retrying via YouTube search: {query}")
+        try:
+            proc = subprocess.run(
+                cmd, cwd=str(self.output_dir), timeout=timeout,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            )
+        except subprocess.TimeoutExpired:
+            self.logger.warning(f"⏰ Retry timed out: {query}")
+            return False
+        except Exception as e:
+            self.logger.warning(f"Retry failed to start: {e}")
+            return False
+
+        # yt-dlp exits 0 even when a search yields nothing, so confirm the file
+        if target.exists() and target.stat().st_size > 0:
+            self.logger.info(f"✅ Recovered: {stem}")
+            return True
+
+        tail = (proc.stdout or "").strip().splitlines()[-1:] or [""]
+        self.logger.warning(f"❌ Retry produced nothing for {query}: {tail[0][:120]}")
+        return False
+
+    @staticmethod
+    def _parse_spotdl_errors(errors_file: Path) -> List[str]:
+        """Extract failed Spotify track ids from spotdl's --save-errors file.
+
+        The file holds a timestamp line followed by one entry per failure:
+          https://open.spotify.com/track/<id> - AudioProviderError: ...
+        """
+        if not errors_file or not errors_file.is_file():
+            return []
+        pat = re.compile(r'open\.spotify\.com/track/([A-Za-z0-9]+)')
+        ids: List[str] = []
+        try:
+            for line in errors_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                m = pat.search(line)
+                if m and m.group(1) not in ids:
+                    ids.append(m.group(1))
+        except Exception:
+            pass
+        return ids
+
     @staticmethod
     def _kill_process_tree(proc: subprocess.Popen) -> None:
         """Kill a process and all its children (e.g. ffmpeg grandchildren)."""

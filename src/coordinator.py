@@ -141,12 +141,19 @@ class Coordinator:
         self.logger.info(f"[{provider.upper()} {index}/{total}] {short_link}")
 
         try:
-            code, _ = downloader.download(link, on_progress=_forward_progress)
+            code, errors_file = downloader.download(link, on_progress=_forward_progress)
             if code != 0:
                 self.logger.warning(f"Failed (code {code})")
             # For non-Spotify, fetch metadata after download
             if provider != "spotify":
                 playlist_name = downloader.fetch_metadata_image(link) or playlist_name
+            elif track_list:
+                # spotdl commits to one YouTube candidate per track and gives up
+                # if it fails, so retry those by searching YouTube ourselves.
+                self._retry_failed_spotify(
+                    downloader, playlist_name, track_list,
+                    errors_file, _forward_progress,
+                )
         except Exception as e:
             self.logger.error(f"💥 {provider} error on {link}: {e}")
             code = 1
@@ -158,6 +165,65 @@ class Coordinator:
             provider=provider, link=link, playlist_name=playlist_name,
             code=code, index=index, total=total
         )
+
+    # ── Recovery pass ────────────────────────────────────────────────
+
+    def _retry_failed_spotify(self, downloader: BaseDownloader, playlist_name: str,
+                              track_list: List[Dict[str, Any]], errors_file: Path,
+                              emit: Any) -> None:
+        """Re-attempt tracks spotdl couldn't fetch, via a direct YouTube search.
+
+        spotdl resolves each track to a single YouTube URL and reports failure
+        if that one is unavailable (age-gated, region-locked, taken down). A
+        plain search usually turns up a working upload of the same song.
+        """
+        failed_ids = downloader._parse_spotdl_errors(errors_file)
+        if not failed_ids:
+            return
+
+        by_id = {t["id"]: t for t in track_list if t.get("id")}
+        padding = max(2, len(str(len(track_list))))
+        # Filenames live under the playlist directory spotdl created
+        safe_dir = "".join(
+            c for c in playlist_name if c not in '<>:"/\\|?*'
+        ).strip() or playlist_name
+
+        targets = [(tid, by_id[tid]) for tid in failed_ids if tid in by_id]
+        if not targets:
+            return
+
+        self.logger.info(
+            f"🔁 {len(targets)} track(s) failed — retrying via YouTube search...")
+
+        recovered = 0
+        for tid, t in targets:
+            title = t.get("title") or ""
+            artists = t.get("artists") or []
+            if not title:
+                continue
+            if emit:
+                emit("track_retry", {"track_id": tid, "title": title})
+            try:
+                ok = downloader.search_and_download(
+                    title=title, artists=artists, playlist_dir=safe_dir,
+                    position=t.get("num"), padding=padding,
+                )
+            except Exception as e:
+                self.logger.warning(f"Retry crashed for {title}: {e}")
+                ok = False
+
+            if ok:
+                recovered += 1
+                if emit:
+                    emit("track_complete", {"title": title, "recovered": True})
+            elif emit:
+                emit("track_failed", {
+                    "track_id": tid, "title": title,
+                    "error": "Unavailable on Spotify's match and YouTube search",
+                })
+
+        self.logger.info(
+            f"🔁 Recovered {recovered}/{len(targets)} previously failed track(s)")
 
     # ── Phase 2: Cleanup (runs after all downloads complete) ──────────
 

@@ -402,6 +402,13 @@ audio { background: var(--bg); border-radius: 4px; }
 }
 .track-failed .track-artist { color: rgba(248,81,73,0.6); }
 
+.track-retry {
+  background: rgba(88,166,255,0.07);
+  animation: trackPulse 1.5s infinite;
+}
+.track-retry .track-title { color: var(--accent); font-weight: 600; }
+.track-retry .track-icon { animation: spin 2s linear infinite; }
+
 .track-unavailable { opacity: 0.55; cursor: help; }
 .track-unavailable .track-title {
   color: var(--muted); font-style: italic;

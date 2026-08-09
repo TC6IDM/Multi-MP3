@@ -318,7 +318,7 @@ function setTrackStatus(info, track, status) {
 function finalizeTrackStates(provider, linkId, info) {
   if (!info || !info.tracks || !info.tracks.length) return;
   for (const t of info.tracks) {
-    if (t.status === 'downloading') {
+    if (t.status === 'downloading' || t.status === 'retrying') {
       if (!t.error) t.error = 'Download failed';
       setTrackStatus(info, t, 'failed');
     } else if (t.status === 'pending') {
@@ -485,14 +485,23 @@ function handleLiveEvent(d, es) {
           // -> the running "first still-pending" pointer. Previously each of
           // these was an Array.find() over every track, making a full run
           // O(tracks^2) — 3.5s for a 5.7k-track batch.
-          let target = info._currentItem ? info.tracks[info._currentItem - 1] : null;
-          if ((!target || target.status === 'downloaded') && title) {
+          let target = null;
+          if (d.recovered) {
+            // A recovery result names exactly one track. Positional fallbacks
+            // would credit the wrong row, so resolve by title only.
             const idx = lookupTrack(info, title);
             if (idx !== undefined) target = info.tracks[idx];
+          } else {
+            target = info._currentItem ? info.tracks[info._currentItem - 1] : null;
+            if ((!target || target.status === 'downloaded') && title) {
+              const idx = lookupTrack(info, title);
+              if (idx !== undefined) target = info.tracks[idx];
+            }
+            if (!target || target.status === 'downloaded') target = nextPending(info);
           }
-          if (!target || target.status === 'downloaded') target = nextPending(info);
           if (target) {
             if (isPlaceholder(target.title)) setTrackTitle(info, target, title);
+            if (d.recovered) target.recovered = true;
             setTrackStatus(info, target, 'downloaded');
           }
         }
@@ -502,6 +511,17 @@ function handleLiveEvent(d, es) {
           const idx = lookupTrack(info, d.query);
           if (idx !== undefined) setTrackStatus(info, info.tracks[idx], 'downloading');
         }
+      } else if (d.event === 'track_retry') {
+        // Second attempt via our own YouTube search
+        let idx;
+        if (d.track_id && info._idIndex) idx = info._idIndex.get(d.track_id);
+        if (idx === undefined && d.title) idx = lookupTrack(info, d.title);
+        if (idx !== undefined) {
+          const t = info.tracks[idx];
+          t.error = '';
+          setTrackStatus(info, t, 'retrying');
+        }
+        info.current_title = '🔁 retrying ' + (d.title || '');
       } else if (d.event === 'track_failed') {
         // Failures arrive either keyed by Spotify id (end-of-run summary) or
         // by title only ("No results found for song: X").
@@ -612,10 +632,12 @@ function trackSignature(info) {
 
 const TRACK_ICON = {
   downloaded: '✅', downloading: '🔄', failed: '❌', unavailable: '🚫',
+  retrying: '🔁',
 };
 const TRACK_CLASS = {
   downloaded: 'track-done', downloading: 'track-active',
   failed: 'track-failed', unavailable: 'track-unavailable',
+  retrying: 'track-retry',
 };
 function trackIcon(s) { return TRACK_ICON[s] || '⏳'; }
 function trackClass(s) { return 'track-row ' + (TRACK_CLASS[s] || 'track-pending'); }
@@ -688,14 +710,21 @@ function updateTrackStatusDOM(provider, linkId, info) {
       if (t.title) setText(ref.titleEl, t.title);
       const tip = t.status === 'failed' ? (t.error || 'Download failed')
         : t.status === 'unavailable' ? 'Not available on Spotify (local file)'
+        : t.status === 'retrying' ? 'Retrying via YouTube search'
+        : t.recovered ? 'Recovered by YouTube search after Spotify match failed'
         : '';
       if (ref.row.title !== tip) ref.row.title = tip;
     }
     dirty.clear();
   }
   let hdr = `Tracks (${info._doneCount || 0}/${info.tracks.length})`;
-  const bad = info.tracks.filter(t => t.status === 'failed').length;
-  const na = info.tracks.filter(t => t.status === 'unavailable').length;
+  let bad = 0, na = 0, rec = 0;
+  for (const t of info.tracks) {
+    if (t.status === 'failed') bad++;
+    else if (t.status === 'unavailable') na++;
+    if (t.recovered) rec++;
+  }
+  if (rec) hdr += `  ·  ${rec} recovered`;
   if (bad) hdr += `  ·  ${bad} failed`;
   if (na) hdr += `  ·  ${na} unavailable`;
   setText(entry.header, hdr);
