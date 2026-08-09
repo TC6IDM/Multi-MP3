@@ -97,6 +97,12 @@ class BaseDownloader(ABC):
             r'|Embedding metadata|Converting)\s*$'
         )
         re_spotdl_tally = re.compile(r'^\s*(\d+)/(\d+)\s+complete\s*$')
+        # spotdl's end-of-run failure summary identifies the track by its
+        # Spotify URL, which is the only reliable way to attribute a failure:
+        #   https://open.spotify.com/track/<id> - AudioProviderError: ...
+        re_spotdl_fail = re.compile(
+            r'https?://open\.spotify\.com/track/([A-Za-z0-9]+)\S*\s*-\s*(.+)'
+        )
 
         env = os.environ.copy()
         try:
@@ -155,6 +161,14 @@ class BaseDownloader(ABC):
                             m = re_yt_dest_intermediate.search(line)
                             if m:
                                 cb("track_active", {"filename": m.group(1).strip()})
+                                continue
+                            # Checked before the completion patterns: a failure
+                            # line also contains a track URL and would
+                            # otherwise be misread as progress.
+                            m = re_spotdl_fail.search(line)
+                            if m:
+                                cb("track_failed", {"track_id": m.group(1),
+                                                    "error": m.group(2).strip()[:200]})
                                 continue
                             m = re_spotdl_done.search(line)
                             if m:

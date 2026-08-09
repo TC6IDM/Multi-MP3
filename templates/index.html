@@ -281,12 +281,14 @@ function lookupTrack(info, query) {
 
 function initTrackIndex(info) {
   info._titleIndex = new Map();
+  info._idIndex = new Map();
   info._dirty = new Set();
   info._doneCount = 0;
   info._pendingCursor = 0;
   for (let i = 0; i < info.tracks.length; i++) {
     const t = info.tracks[i];
     addTrackKeys(info, t, i);
+    if (t.id) info._idIndex.set(t.id, i);
     if (t.status === 'downloaded') info._doneCount++;
   }
   info.tracks_done = info._doneCount;
@@ -308,6 +310,24 @@ function setTrackStatus(info, track, status) {
   track.status = status;
   info.tracks_done = info._doneCount;
   if (info._dirty) info._dirty.add(track.num);
+}
+
+// Called once a link finishes. Without this, a track that errored keeps its
+// 🔄 spinner forever, because spotdl only prints a completion line for the
+// tracks that actually succeeded.
+function finalizeTrackStates(provider, linkId, info) {
+  if (!info || !info.tracks || !info.tracks.length) return;
+  for (const t of info.tracks) {
+    if (t.status === 'downloading') {
+      if (!t.error) t.error = 'Download failed';
+      setTrackStatus(info, t, 'failed');
+    } else if (t.status === 'pending') {
+      // Never attempted — usually a local file in the playlist, which has no
+      // Spotify id and therefore nothing to download.
+      setTrackStatus(info, t, (t.local || !t.id) ? 'unavailable' : 'failed');
+    }
+  }
+  updateTrackStatusDOM(provider, linkId, info);
 }
 
 function setTrackTitle(info, track, title) {
@@ -382,6 +402,10 @@ function handleLiveEvent(d, es) {
         p.links[linkId].status = d.code === 0 ? 'complete' : 'failed';
         p.links[linkId].code = d.code;
         if (d.name) p.links[linkId].name = d.name;
+        // The run is over, so nothing can still be in flight. Anything left
+        // spinning failed; anything never started was unavailable (Spotify
+        // local files, for instance, are never fetched).
+        finalizeTrackStates(d.provider, linkId, p.links[linkId]);
       }
       scheduleRender();
       return;
@@ -478,6 +502,15 @@ function handleLiveEvent(d, es) {
           const idx = lookupTrack(info, d.query);
           if (idx !== undefined) setTrackStatus(info, info.tracks[idx], 'downloading');
         }
+      } else if (d.event === 'track_failed') {
+        // spotdl identifies the failure by Spotify track id
+        const idx = d.track_id !== undefined && info._idIndex
+          ? info._idIndex.get(d.track_id) : undefined;
+        const target = idx !== undefined ? info.tracks[idx] : null;
+        if (target) {
+          target.error = d.error || 'Download failed';
+          setTrackStatus(info, target, 'failed');
+        }
       } else if (d.event === 'tally') {
         // spotdl's own "N/M complete" counter. Authoritative for the bar even
         // when a title didn't resolve to a row in the list.
@@ -564,8 +597,13 @@ function trackSignature(info) {
   return t.length + ':' + (info._trackSigSalt || 0);
 }
 
-const TRACK_ICON = { downloaded: '✅', downloading: '🔄' };
-const TRACK_CLASS = { downloaded: 'track-done', downloading: 'track-active' };
+const TRACK_ICON = {
+  downloaded: '✅', downloading: '🔄', failed: '❌', unavailable: '🚫',
+};
+const TRACK_CLASS = {
+  downloaded: 'track-done', downloading: 'track-active',
+  failed: 'track-failed', unavailable: 'track-unavailable',
+};
 function trackIcon(s) { return TRACK_ICON[s] || '⏳'; }
 function trackClass(s) { return 'track-row ' + (TRACK_CLASS[s] || 'track-pending'); }
 
@@ -635,11 +673,19 @@ function updateTrackStatusDOM(provider, linkId, info) {
       setClass(ref.row, trackClass(t.status));
       setText(ref.iconEl, trackIcon(t.status));
       if (t.title) setText(ref.titleEl, t.title);
+      const tip = t.status === 'failed' ? (t.error || 'Download failed')
+        : t.status === 'unavailable' ? 'Not available on Spotify (local file)'
+        : '';
+      if (ref.row.title !== tip) ref.row.title = tip;
     }
     dirty.clear();
   }
-  setText(entry.header,
-    `Tracks (${info._doneCount || 0}/${info.tracks.length})`);
+  let hdr = `Tracks (${info._doneCount || 0}/${info.tracks.length})`;
+  const bad = info.tracks.filter(t => t.status === 'failed').length;
+  const na = info.tracks.filter(t => t.status === 'unavailable').length;
+  if (bad) hdr += `  ·  ${bad} failed`;
+  if (na) hdr += `  ·  ${na} unavailable`;
+  setText(entry.header, hdr);
 }
 
 // ── Structure builders (run once per provider / per card) ──────────────

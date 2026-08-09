@@ -109,6 +109,11 @@ class Coordinator:
                             "title": t.get("name", ""),
                             "artists": [a.get("name", "") for a in t.get("artists", [])],
                             "duration_ms": t.get("duration_ms", 0),
+                            # spotdl reports failures by Spotify track URL, so
+                            # the id is what lets us mark the right row failed.
+                            # Local files added to a playlist have no id.
+                            "id": t.get("id") or "",
+                            "local": bool(t.get("is_local")),
                         })
                     self.logger.info(f"📊 {playlist_name}: {total_tracks} tracks")
             except Exception as e:
