@@ -797,7 +797,15 @@ function ensureCard(provider, linkId) {
   const headerRow = mk('div', 'card-header-row');
   const expandIcon = mk('span', 'card-expand-icon', '');
   const info = mk('div', 'card-info');
-  const nameEl = mk('div', 'card-name', '');
+  // The name opens the source playlist. stopPropagation keeps the click from
+  // also toggling the track list underneath it.
+  const nameEl = mk('a', 'card-name', '');
+  if (/^https?:\/\//i.test(linkId)) {
+    nameEl.href = linkId;
+    nameEl.target = '_blank';
+    nameEl.rel = 'noopener noreferrer';
+    nameEl.addEventListener('click', (e) => e.stopPropagation());
+  }
   const subtitle = mk('div', 'card-subtitle', '');
   const progress = mk('div', 'card-progress');
   const barOuter = mk('div', 'progress-bar');

@@ -235,7 +235,14 @@ audio { background: var(--bg); border-radius: 4px; }
 .card-name {
   font-weight: 600; font-size: 0.9rem; color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  display: flex; align-items: center; gap: 6px;
+  display: block;
+  text-decoration: none;
+  width: fit-content; max-width: 100%;
+}
+a.card-name:hover {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .card-subtitle {

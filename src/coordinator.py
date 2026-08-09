@@ -192,8 +192,15 @@ class Coordinator:
         if not targets:
             return
 
-        self.logger.info(
-            f"🔁 {len(targets)} track(s) failed — retrying via YouTube search...")
+        # Route retry output to the owning playlist's log pane rather than the
+        # global one, matching how subprocess output is handled.
+        def say(msg: str) -> None:
+            if emit:
+                emit("log", {"line": msg})
+            else:
+                self.logger.info(msg)
+
+        say(f"🔁 {len(targets)} track(s) failed — retrying via YouTube search...")
 
         recovered = 0
         for tid, t in targets:
@@ -206,10 +213,10 @@ class Coordinator:
             try:
                 ok = downloader.search_and_download(
                     title=title, artists=artists, playlist_dir=safe_dir,
-                    position=t.get("num"), padding=padding,
+                    position=t.get("num"), padding=padding, on_log=say,
                 )
             except Exception as e:
-                self.logger.warning(f"Retry crashed for {title}: {e}")
+                say(f"Retry crashed for {title}: {e}")
                 ok = False
 
             if ok:
@@ -219,11 +226,13 @@ class Coordinator:
             elif emit:
                 emit("track_failed", {
                     "track_id": tid, "title": title,
-                    "error": "Unavailable on Spotify's match and YouTube search",
+                    "error": "No working source found on Spotify's match or YouTube",
                 })
 
+        say(f"🔁 Recovered {recovered}/{len(targets)} previously failed track(s)")
+        # One line in the global log so the run summary still reflects it
         self.logger.info(
-            f"🔁 Recovered {recovered}/{len(targets)} previously failed track(s)")
+            f"🔁 {playlist_name}: recovered {recovered}/{len(targets)} failed track(s)")
 
     # ── Phase 2: Cleanup (runs after all downloads complete) ──────────
 

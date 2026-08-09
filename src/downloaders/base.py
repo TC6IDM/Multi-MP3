@@ -77,6 +77,15 @@ class BaseDownloader(ABC):
             r'\[ExtractAudio\]\s+Destination:\s+(.+)'
             r'|\[download\]\s+(.+?)\s+has already been downloaded'
         )
+        # SoundCloud (and any source already serving mp3) never emits an
+        # ExtractAudio line, because there is nothing to convert — the file
+        # lands straight from "[download] Destination: ....mp3". Treating that
+        # as merely "in flight" meant those tracks never resolved at all.
+        # Restricted to .mp3 on purpose: every downloader here targets mp3, so
+        # .m4a/.webm/.opus are intermediates that will still be extracted, and
+        # counting those would complete each YouTube track twice.
+        re_yt_dest_final = re.compile(
+            r'\[download\]\s+Destination:\s+(.+\.mp3)\s*$', re.IGNORECASE)
         re_yt_dest_intermediate = re.compile(r'\[download\]\s+Destination:\s+(.+)')
         re_scdl_track = re.compile(r'\[(\d+)/(\d+)\].*Downloading')
         # spotdl titles can still arrive without a closing quote if any TUI
@@ -128,7 +137,9 @@ class BaseDownloader(ABC):
                         line = raw.rstrip('\n')
                         if not line:
                             continue
-                        if 'DEBUG' in line:
+                        # yt-dlp writes "[debug]" lowercase, which slipped past
+                        # a case-sensitive check and flooded the log.
+                        if 'DEBUG' in line or '[debug]' in line:
                             continue
 
                         # Drop high-frequency progress noise — yt-dlp/scdl emit
@@ -161,6 +172,12 @@ class BaseDownloader(ABC):
                             if m:
                                 filename = m.group(1) or m.group(2) or ""
                                 cb("track_complete", {"filename": filename.strip()})
+                                continue
+                            # Already-final audio (SoundCloud http_mp3, etc.):
+                            # no extraction step follows, so this IS completion.
+                            m = re_yt_dest_final.search(line)
+                            if m:
+                                cb("track_complete", {"filename": m.group(1).strip()})
                                 continue
                             # Intermediate container destination — names the
                             # track now in flight but is NOT a completion.
@@ -239,7 +256,8 @@ class BaseDownloader(ABC):
 
     def search_and_download(self, title: str, artists: List[str],
                             playlist_dir: str, position: int | None = None,
-                            padding: int = 2, timeout: int = 600) -> bool:
+                            padding: int = 2, timeout: int = 600,
+                            on_log: Callable[[str], None] | None = None) -> bool:
         """Last-resort recovery for a single track.
 
         spotdl picks a YouTube match itself and gives up if that one URL fails,
@@ -276,26 +294,34 @@ class BaseDownloader(ABC):
             f"ytsearch1:{query}",
         ]
 
-        self.logger.info(f"🔁 Retrying via YouTube search: {query}")
+        # Retry chatter belongs to the playlist that owns the track, not the
+        # global log, so it goes through on_log when one is supplied.
+        def say(msg: str, warn: bool = False) -> None:
+            if on_log:
+                on_log(msg)
+            else:
+                (self.logger.warning if warn else self.logger.info)(msg)
+
+        say(f"🔁 Retrying via YouTube search: {query}")
         try:
             proc = subprocess.run(
                 cmd, cwd=str(self.output_dir), timeout=timeout,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             )
         except subprocess.TimeoutExpired:
-            self.logger.warning(f"⏰ Retry timed out: {query}")
+            say(f"⏰ Retry timed out: {query}", warn=True)
             return False
         except Exception as e:
-            self.logger.warning(f"Retry failed to start: {e}")
+            say(f"Retry failed to start: {e}", warn=True)
             return False
 
         # yt-dlp exits 0 even when a search yields nothing, so confirm the file
         if target.exists() and target.stat().st_size > 0:
-            self.logger.info(f"✅ Recovered: {stem}")
+            say(f"✅ Recovered: {stem}")
             return True
 
         tail = (proc.stdout or "").strip().splitlines()[-1:] or [""]
-        self.logger.warning(f"❌ Retry produced nothing for {query}: {tail[0][:120]}")
+        say(f"❌ No YouTube match for {query}: {tail[0][:120]}", warn=True)
         return False
 
     @staticmethod

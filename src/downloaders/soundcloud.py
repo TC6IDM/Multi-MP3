@@ -14,11 +14,14 @@ class SoundCloudDownloader(BaseDownloader):
             "scdl",
             "-l", link,
             "--path", str(self.output_dir.resolve()),
-            "--playlist-name-format", "%(playlist)s/%(playlist_index)04d %(uploader)s - %(title)s.%(ext)s",
+            # scdl already creates a directory named after the playlist under
+            # --path, so a leading %(playlist)s/ here nested it twice:
+            #   downloads/<playlist>/<playlist>/0001 ....mp3
+            # which also hid the files from the cleanup/missing-track scan.
+            "--playlist-name-format", "%(playlist_index)04d %(uploader)s - %(title)s.%(ext)s",
             "--onlymp3",
             "--original-art",
             "-c",
-            "--debug",
             "--yt-dlp-args", "--write-info-json --ignore-errors --no-abort-on-error --yes-playlist --embed-thumbnail --audio-quality 1",
         ]
         return self._download("scdl", link, cmd, on_progress=on_progress)
