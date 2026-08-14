@@ -33,7 +33,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-p", "--parallel",
         action="store_true",
-        help="Download multiple links in parallel within each provider"
+        help="Run providers and their links concurrently. Without it the whole "
+             "run is sequential — one provider, one playlist and one track at "
+             "a time, which is what keeps SoundCloud under its per-IP rate limit"
     )
     parser.add_argument(
         "--max-workers",

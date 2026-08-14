@@ -329,7 +329,12 @@ class Coordinator:
     # ── Cross-provider orchestration ─────────────────────────────────
 
     def process_all(self, input_file: Path, providers: List[str] | None = None) -> int:
-        """Run all providers in parallel (download phases), then cleanup each."""
+        """Run every provider's download phase, then cleanup once.
+
+        With `parallel` set the providers run concurrently; without it the run
+        is fully sequential — one provider at a time, and one link at a time
+        inside each.
+        """
         if providers is None:
             providers = ["soundcloud", "youtube", "spotify"]
 
@@ -345,16 +350,35 @@ class Coordinator:
         all_results: List[LinkResult] = []
 
         with self.tui:
-            # Run all provider download phases in parallel
-            with ThreadPoolExecutor(max_workers=min(len(active_providers), self.max_workers)) as executor:
-                future_to_provider = {
-                    executor.submit(self.process_provider, p, links): p
-                    for p, links in active_providers
-                }
-                for future in as_completed(future_to_provider):
-                    provider = future_to_provider[future]
+            # Providers used to always run concurrently here, so switching
+            # --parallel off only serialised the links *within* a provider —
+            # SoundCloud still ran alongside everything else. With it off the
+            # whole run is now single-threaded: one provider, one playlist, one
+            # track at a time, which is what keeps SoundCloud under its
+            # per-IP rate limit.
+            if self.parallel and len(active_providers) > 1:
+                with ThreadPoolExecutor(max_workers=min(len(active_providers), self.max_workers)) as executor:
+                    future_to_provider = {
+                        executor.submit(self.process_provider, p, links): p
+                        for p, links in active_providers
+                    }
+                    for future in as_completed(future_to_provider):
+                        provider = future_to_provider[future]
+                        try:
+                            results = future.result()
+                            all_results.extend(results)
+                            code = max((r.code for r in results), default=0)
+                            if code != 0:
+                                exit_code = code
+                        except Exception as e:
+                            self.logger.error(f"💥 {provider} provider crashed: {e}")
+                            exit_code = 1
+            else:
+                if len(active_providers) > 1:
+                    self.logger.info("🐌 Sequential mode — one provider at a time")
+                for provider, links in active_providers:
                     try:
-                        results = future.result()
+                        results = self.process_provider(provider, links)
                         all_results.extend(results)
                         code = max((r.code for r in results), default=0)
                         if code != 0:

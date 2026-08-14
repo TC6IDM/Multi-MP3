@@ -143,7 +143,14 @@ audio { background: var(--bg); border-radius: 4px; }
   color: var(--muted); font-size: 0.7rem; width: 14px;
   transition: transform 0.2s;
 }
-.provider-icon { font-size: 1.2rem; filter: drop-shadow(0 0 3px rgba(88,166,255,0.3)); }
+.provider-icon {
+  display: flex; align-items: center; flex-shrink: 0;
+  filter: drop-shadow(0 0 4px rgba(0,0,0,0.45));
+}
+/* Brand marks are inline SVG, so they inherit no font metrics — block display
+   stops the baseline gap that otherwise misaligns them in flex headers. */
+.brand-svg { display: block; }
+.muted .brand-svg { display: inline-block; vertical-align: -2px; }
 .provider-name {
   font-weight: 700; color: var(--text); min-width: 95px;
   letter-spacing: 0.03em; font-size: 0.85rem;
@@ -231,6 +238,15 @@ audio { background: var(--bg); border-radius: 4px; }
   display: flex; flex-direction: column; gap: 3px;
   flex: 1; min-width: 0;
 }
+
+.card-brand {
+  display: flex; align-items: center; flex-shrink: 0;
+  /* .card-header-row aligns to flex-start, so nudge the mark down onto the
+     playlist-name baseline instead of the top of the row. */
+  padding-top: 2px;
+  opacity: 0.9;
+}
+.card-brand .brand-svg { width: 15px; height: 15px; }
 
 .card-name {
   font-weight: 600; font-size: 0.9rem; color: var(--text);

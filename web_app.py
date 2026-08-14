@@ -19,7 +19,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 
-from src.utils import clean_url, get_spotify_creds, read_links
+from src.utils import clean_url, get_spotify_creds, provider_for, read_links
 from src.coordinator import Coordinator
 from src.event_bus import EventBus
 from src.web_progress import WebProgress
@@ -203,15 +203,22 @@ async def api_create_job(data: Dict[str, Any]):
     providers = data.get("providers", ["soundcloud", "youtube", "spotify"])
     parallel = data.get("parallel", True)
 
-    # Group links by provider so frontend can pre-render all cards
+    # Group links by provider so the frontend can pre-render all cards.
+    # Unticking a provider drops its links here rather than only downstream:
+    # the coordinator already skipped them, but they still reached the job and
+    # the response, so the Live tab rendered cards that sat "Queued" forever.
     links_by_provider: Dict[str, List[str]] = {"spotify": [], "youtube": [], "soundcloud": []}
     for link in links:
-        if "spotify.com" in link:
-            links_by_provider["spotify"].append(link)
-        elif "soundcloud.com" in link:
-            links_by_provider["soundcloud"].append(link)
-        elif "youtube.com" in link or "youtu.be" in link:
-            links_by_provider["youtube"].append(link)
+        provider = provider_for(link)
+        if provider in links_by_provider and provider in providers:
+            links_by_provider[provider].append(link)
+
+    links = [link for bucket in links_by_provider.values() for link in bucket]
+    if not links:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No links for the selected provider(s): {', '.join(providers) or 'none'}",
+        )
 
     job = mgr.create_job(links, providers, parallel)
 

@@ -86,7 +86,7 @@ The dashboard has four tabs:
 
 **On the Live tab:**
 
-- Each provider (📺 YouTube / 🔊 SoundCloud / 🎧 Spotify) is a collapsible section — click the header to expand or collapse.
+- Each provider (YouTube / SoundCloud / Spotify, shown with its own logo) is a collapsible section — click the header to expand or collapse.
 - Inside are **playlist cards** showing the playlist name, a track progress bar, and current status.
 - **Click a card** to expand its full track list — every track shows ✅ downloaded, 🔄 downloading, or ⏳ pending.
 - Click **📜 Log** on a card to see the subprocess output for *that playlist only*, instead of one giant merged log.
@@ -191,7 +191,7 @@ python main.py [input] [output] [options]
 | `output` (positional) | `downloads` | Output directory |
 | `-i`, `--input-file` | — | Override the input file |
 | `-o`, `--output-dir` | — | Override the output directory |
-| `-p`, `--parallel` | off | Download multiple links concurrently |
+| `-p`, `--parallel` | off | Run providers and links concurrently (off = fully sequential) |
 | `--max-workers N` | `4` | Concurrency limit when `--parallel` is set |
 | `--providers ...` | `all` | Any of `spotify`, `youtube`, `soundcloud`, `all` |
 | `--tui` | off | Rich progress bars in the terminal |
@@ -240,6 +240,7 @@ downloads/
 ├── .metadata/          # Aggregated playlist JSON
 ├── .icons/             # Playlist cover art
 ├── .errors/            # Per-run error files
+├── .archive/           # Per-playlist SoundCloud resume state
 ├── .web/               # Web UI job history
 └── spotdl.log          # Full run log
 ```
@@ -254,11 +255,13 @@ downloads/
 
 ## Parallelism
 
-Downloads run concurrently at three levels:
+With `--parallel` set (the Web UI's **Parallel** checkbox, on by default), downloads run concurrently at three levels:
 
 1. **Across providers** — Spotify, YouTube, and SoundCloud run at the same time.
-2. **Within a provider** — multiple playlists download concurrently when `--parallel` is set and there's more than one link (bounded by `--max-workers`).
+2. **Within a provider** — multiple playlists download concurrently, bounded by `--max-workers`.
 3. **Within a playlist** — `spotdl` and `yt-dlp` use their own internal worker pools for individual tracks.
+
+**Turn it off and the entire run is single-threaded** — one provider, then the next; one playlist at a time; one track at a time. That is the setting to use for large SoundCloud runs: SoundCloud rate-limits by IP, and once tripped it rejects the cached `client_id` *and* blocks the refresh request, so every remaining track fails with 403. SoundCloud requests are additionally paced within a playlist (`--sleep-requests`, `--concurrent-fragments 1`, exponential retry backoff), so a serial run is slower but actually finishes.
 
 Cleanup is deliberately deferred until all downloads finish. Running it earlier would let one playlist's metadata scan race against another's in-flight writes.
 
@@ -268,6 +271,34 @@ Logs include thread names, so you can confirm parallel execution:
 2026-08-08 12:00:01 | INFO | ThreadPoolExecutor-0_1 | 🎵 yt-dlp: https://...
 2026-08-08 12:00:01 | INFO | ThreadPoolExecutor-0_2 | 🎵 SpotDL: https://...
 ```
+
+---
+
+## Resuming a Failed SoundCloud Playlist
+
+SoundCloud rate-limits by IP, and a long playlist can hit the wall partway through — the run doesn't crash, it just fails every remaining track with 403 while still exiting 0.
+
+Each SoundCloud playlist gets a **download archive** at `downloads/.archive/<playlist>-<hash>.txt` recording the track IDs it has successfully downloaded. Only successful downloads are recorded, so failures are always retried.
+
+When a run ends with failed tracks, the playlist is **automatically re-run from where it stopped**, after a wait for the rate limit to clear:
+
+```
+⏳ 358 track(s) failed after 102 new this pass — waiting 60s for the rate limit to clear, then resuming.
+▶️ Resuming — 102 track(s) already done, skipping those (attempt 2/3)
+✅ Resume complete — 460 track(s) downloaded in total
+```
+
+The archive is what makes this cheap. Without it, a resumed run would call the API once per track it already has, just to work out the filename and find the file already exists — burning the same rate limit that caused the failure. yt-dlp checks the archive against the playlist entry, which already carries the track ID from the single playlist call, so skipped tracks cost no requests at all.
+
+If it still can't finish, it stops and tells you where to pick up; just re-run the same link later and it resumes from there. Two passes in a row that download nothing new also stop it early, rather than waiting out attempts that aren't helping.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SOUNDCLOUD_MAX_ATTEMPTS` | `3` | How many times to resume a partially-failed playlist |
+| `SOUNDCLOUD_RETRY_BACKOFF` | `60,300,900` | Seconds to wait before each resume |
+| `SOUNDCLOUD_AUTH_TOKEN` | — | Optional; an authenticated session gets a much higher rate limit |
+
+> Deleting a playlist's file in `.archive/` forces a full re-check on the next run. Do that if you delete MP3s by hand and want them fetched again — the archive would otherwise consider them done.
 
 ---
 

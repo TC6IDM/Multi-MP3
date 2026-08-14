@@ -61,23 +61,40 @@ def clean_url(line: str) -> str:
     return ""
 
 
+def provider_for(url: str) -> str | None:
+    """Which provider owns a URL, or None if it belongs to none of them.
+
+    The single source of truth for this mapping — the web API needs the same
+    answer as the CLI when it decides which links a job should even include.
+    """
+    if "spotify.com" in url:
+        return "spotify"
+    if "soundcloud.com" in url:
+        return "soundcloud"
+    if "youtube.com" in url or "youtu.be" in url:
+        return "youtube"
+    return None
+
+
 def read_links(input_path: Path, logger: logging.Logger) -> Dict[str, List[str]]:
     """Read and categorize all links from the input file by provider."""
     spotify_links: List[str] = []
     soundcloud_links: List[str] = []
     youtube_links: List[str] = []
+    buckets = {
+        "spotify": spotify_links,
+        "soundcloud": soundcloud_links,
+        "youtube": youtube_links,
+    }
 
     try:
         with input_path.open("r", encoding="utf-8") as f:
             for raw in f:
                 url = clean_url(raw)
                 if url:
-                    if "spotify.com" in url:
-                        spotify_links.append(url)
-                    elif "soundcloud.com" in url:
-                        soundcloud_links.append(url)
-                    elif "youtube.com" in url or "youtu.be" in url:
-                        youtube_links.append(url)
+                    bucket = buckets.get(provider_for(url) or "")
+                    if bucket is not None:
+                        bucket.append(url)
 
         total = len(spotify_links) + len(soundcloud_links) + len(youtube_links)
         logger.info(f"✅ Parsed {total} total links:")

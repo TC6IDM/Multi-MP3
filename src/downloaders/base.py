@@ -56,7 +56,15 @@ class BaseDownloader(ABC):
     
     def _download(self, name: str, link: str, cmd: List[str],
                   _errors_file: Path | None = None,
-                  on_progress: Callable[[str, Dict[str, Any]], None] | None = None) -> Tuple[int, Path]:
+                  on_progress: Callable[[str, Dict[str, Any]], None] | None = None,
+                  stats_out: Dict[str, Any] | None = None) -> Tuple[int, Path]:
+        """Run a downloader subprocess, parsing its output for progress.
+
+        `stats_out`, when given, IS the live stats dict the reader thread
+        updates, so a caller can inspect how far a run got and how many items
+        failed — the return code alone can't say, since yt-dlp and scdl exit 0
+        even when most of a playlist failed.
+        """
 
         errors_file = self.errors_dir / f"errors-{name}-{datetime.now().strftime('%Y%m%d%H%M%S%f')}.txt" if not _errors_file else _errors_file
 
@@ -118,8 +126,18 @@ class BaseDownloader(ABC):
         re_spotdl_notfound = re.compile(
             r'(?:LookupError:\s*)?No results found for song:\s*(.+?)\s*$'
         )
+        # A per-item extractor error. SoundCloud emits one of these for every
+        # remaining track once it rate-limits the IP, and yt-dlp still exits 0,
+        # so without this the run looked successful while hundreds failed.
+        re_item_error = re.compile(
+            r'^ERROR:\s*(?:\[[^\]]+\]\s*)?(.+?)\s*$'
+        )
 
         env = os.environ.copy()
+        # Shared with the reader thread so the outcome can be reported even
+        # when the tool exits 0 after failing most of its items.
+        stats: Dict[str, Any] = stats_out if stats_out is not None else {}
+        stats.update({"item": 0, "total": 0, "errors": 0, "last_error": ""})
         try:
             proc = subprocess.Popen(cmd, env=env, cwd=str(self.output_dir),
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -162,7 +180,19 @@ class BaseDownloader(ABC):
                         if cb and line:
                             m = re_yt_item.search(line)
                             if m:
+                                stats["item"] = int(m.group(1))
+                                stats["total"] = int(m.group(2))
                                 cb("track", {"total": int(m.group(2)), "current": int(m.group(1))})
+                                continue
+                            # Per-item failure: attribute it to whichever item
+                            # is currently in flight, since these errors carry
+                            # no title of their own.
+                            m = re_item_error.search(line)
+                            if m:
+                                stats["errors"] += 1
+                                stats["last_error"] = m.group(1)[:200]
+                                cb("track_failed", {"index": stats["item"],
+                                                    "error": m.group(1)[:200]})
                                 continue
                             m = re_scdl_track.search(line)
                             if m:
@@ -239,11 +269,31 @@ class BaseDownloader(ABC):
 
             reader.join()
 
-            if proc.returncode == 0:
+            rc = proc.returncode
+            errs, total = stats["errors"], stats["total"]
+
+            if errs:
+                # yt-dlp/scdl exit 0 even when most items failed, which made a
+                # rate-limited run look like a success.
+                scope = f"{errs}/{total}" if total else str(errs)
+                self.logger.warning(
+                    f"⚠️ {name}: {scope} item(s) failed — last: {stats['last_error']}")
+                if total and errs >= max(5, total * 0.5):
+                    self.logger.error(
+                        f"🚫 {name} lost more than half the playlist. SoundCloud "
+                        f"rate-limits by IP; wait a while and re-run — already "
+                        f"downloaded files are skipped.")
+                    if cb:
+                        cb("error", {"message": f"{scope} items failed (rate limited?)"})
+                    rc = rc or 1
+                elif rc == 0:
+                    rc = 0   # a handful of bad tracks is not a failed run
+
+            if rc == 0:
                 self.logger.info(f"✅ {name} complete")
             else:
-                self.logger.warning(f"{name} exit code: {proc.returncode}")
-            return proc.returncode, errors_file
+                self.logger.warning(f"{name} exit code: {rc}")
+            return rc, errors_file
         except Exception as e:
             self.logger.error(f"💥 {name} error: {e}")
             if cb:
