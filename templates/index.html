@@ -131,14 +131,76 @@ async function loadLinks() {
   const r = await fetch('/api/links');
   const d = await r.json();
   document.getElementById('links-input').value = d.text;
-  if (d.parsed.total > 0) {
-    document.getElementById('parse-preview').innerHTML =
-      `Parsed: ${d.parsed.total} links `
-      + `(${providerIconHTML('spotify', 13)} ${d.parsed.spotify} `
-      + `${providerIconHTML('soundcloud', 13)} ${d.parsed.soundcloud} `
-      + `${providerIconHTML('youtube', 13)} ${d.parsed.youtube})`;
-  }
+  lastParsed = d.parsed;
+  renderParsePreview();
 }
+
+// ── Parse preview ──
+// Counts come from the server, which runs the same parser a real job does, so
+// the preview can't quietly disagree with what would actually download. The
+// provider filter is applied here instead, so ticking a box repaints instantly
+// with no round-trip.
+let lastParsed = { total: 0, spotify: 0, soundcloud: 0, youtube: 0 };
+let parseTimer = null;
+let parseSeq = 0;
+
+function renderParsePreview() {
+  const el = document.getElementById('parse-preview');
+  const on = PROVIDER_ORDER.filter(p => document.getElementById('provider-' + p).checked);
+  const total = lastParsed.total || 0;
+  const selected = on.reduce((s, p) => s + (lastParsed[p] || 0), 0);
+  const skipped = total - selected;
+
+  if (!total) {
+    el.textContent = document.getElementById('links-input').value.trim()
+      ? 'No Spotify, SoundCloud or YouTube links found.'
+      : 'Paste some links above to see what will be downloaded.';
+    return;
+  }
+
+  const counts = PROVIDER_ORDER.map(p => {
+    const off = !on.includes(p);
+    const label = PROVIDER_BRANDS[p].label;
+    return `<span class="pp-count${off ? ' pp-off' : ''}" title="${label}`
+         + `${off ? ' — unticked, these will be skipped' : ''}">`
+         + `${providerIconHTML(p, 13)} ${lastParsed[p] || 0}</span>`;
+  }).join(' ');
+
+  el.innerHTML = `Parsed: <strong>${selected}</strong> link${selected === 1 ? '' : 's'} `
+    + `(${counts})` + (skipped ? ` · ${skipped} skipped` : '');
+}
+
+// Re-counts what is in the box right now, saved or not.
+async function refreshParsePreview() {
+  const text = document.getElementById('links-input').value;
+  const seq = ++parseSeq;
+  try {
+    const r = await fetch('/api/links/parse', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text}),
+    });
+    if (!r.ok) return;
+    const d = await r.json();
+    // A later keystroke already answered — its counts are the current ones.
+    if (seq !== parseSeq) return;
+    lastParsed = d.parsed;
+  } catch (_) {
+    return;   // offline or mid-restart: keep showing the last good counts
+  }
+  renderParsePreview();
+}
+
+// Typing fires per character, so the request is debounced; the checkbox
+// handlers only re-render, since unticking a provider can't change the counts.
+document.getElementById('links-input').addEventListener('input', () => {
+  clearTimeout(parseTimer);
+  parseTimer = setTimeout(refreshParsePreview, 250);
+});
+PROVIDER_ORDER.forEach(p => {
+  document.getElementById('provider-' + p)
+    .addEventListener('change', renderParsePreview);
+});
 
 // ── Start job ──
 async function startJob() {
@@ -330,6 +392,34 @@ function initTrackIndex(info) {
   info.tracks_done = info._doneCount;
 }
 
+// Grow the placeholder track list to `n` rows, keeping the indexes in step.
+// A resume learns its length in pieces: archive skips arrive one at a time
+// carrying only their position, and the real total only lands with the first
+// track that actually downloads. Building rows on demand means those skipped
+// tracks have somewhere to be ticked off, whichever order the news arrives in.
+function ensureTracks(info, n) {
+  if (!n || n < 0) return;
+  if (!info.tracks) info.tracks = [];
+  const before = info.tracks.length;
+  if (n > before) {
+    for (let i = before; i < n; i++) {
+      info.tracks.push({
+        num: i + 1, title: `Track ${i + 1}`, artists: [], status: 'pending',
+      });
+    }
+    if (!info._titleIndex) {
+      initTrackIndex(info);
+    } else {
+      for (let i = before; i < n; i++) addTrackKeys(info, info.tracks[i], i);
+    }
+    // Signature change → the list is rebuilt with the new rows on next render
+    info._trackSigSalt = (info._trackSigSalt || 0) + 1;
+  }
+  if ((info.tracks_total || 0) < info.tracks.length) {
+    info.tracks_total = info.tracks.length;
+  }
+}
+
 // Advance a cursor instead of re-scanning for the first unfinished track.
 function nextPending(info) {
   const tracks = info.tracks;
@@ -495,13 +585,9 @@ function handleLiveEvent(d, es) {
         info.tracks_total = d.total;
         info._currentItem = d.current;
         info.current_title = `Track ${d.current}/${d.total}`;
-        if (!info.tracks || !info.tracks.length) {
-          info.tracks = Array.from({length: d.total}, (_, i) => ({
-            num: i + 1, title: `Track ${i + 1}`, artists: [], status: 'pending'
-          }));
-          initTrackIndex(info);
-          info._trackSigSalt = (info._trackSigSalt || 0) + 1;
-        }
+        // No-op once the list is already that long (a Spotify metadata list,
+        // or placeholders a resume's archive skips created ahead of this).
+        ensureTracks(info, d.total);
         setTrackStatus(info, info.tracks[d.current - 1], 'downloading');
       } else if (d.event === 'track_active') {
         // Names the track currently in flight; not a completion.
@@ -515,14 +601,23 @@ function handleLiveEvent(d, es) {
         }
       } else if (d.event === 'track_complete') {
         const title = cleanTrackTitle(d.filename || d.title || '');
-        info.current_title = title;
+        info.current_title = d.archived ? `⏭ ${title} (already had)` : title;
+        // An archive skip names its own playlist position and arrives before
+        // anything has established how long the playlist is, so it both sizes
+        // the list and picks its own row — no cursor guessing.
+        if (d.index) ensureTracks(info, d.index);
         if (info.tracks) {
           // Resolution order, all O(1): authoritative item index -> title map
           // -> the running "first still-pending" pointer. Previously each of
           // these was an Array.find() over every track, making a full run
           // O(tracks^2) — 3.5s for a 5.7k-track batch.
           let target = null;
-          if (d.recovered) {
+          if (d.index) {
+            // The event carries its own position (archive skips do), which
+            // beats every fallback below — those assume the completion refers
+            // to whatever was last seen in flight.
+            target = info.tracks[d.index - 1] || null;
+          } else if (d.recovered) {
             // A recovery result names exactly one track. Positional fallbacks
             // would credit the wrong row, so resolve by title only.
             const idx = lookupTrack(info, title);
@@ -538,6 +633,7 @@ function handleLiveEvent(d, es) {
           if (target) {
             if (isPlaceholder(target.title)) setTrackTitle(info, target, title);
             if (d.recovered) target.recovered = true;
+            if (d.archived) target.archived = true;
             setTrackStatus(info, target, 'downloaded');
           }
         }
@@ -751,18 +847,21 @@ function updateTrackStatusDOM(provider, linkId, info) {
         : t.status === 'unavailable' ? 'Not available on Spotify (local file)'
         : t.status === 'retrying' ? 'Retrying via YouTube search'
         : t.recovered ? 'Recovered by YouTube search after Spotify match failed'
+        : t.archived ? 'Already downloaded on an earlier run — skipped'
         : '';
       if (ref.row.title !== tip) ref.row.title = tip;
     }
     dirty.clear();
   }
   let hdr = `Tracks (${info._doneCount || 0}/${info.tracks.length})`;
-  let bad = 0, na = 0, rec = 0;
+  let bad = 0, na = 0, rec = 0, had = 0;
   for (const t of info.tracks) {
     if (t.status === 'failed') bad++;
     else if (t.status === 'unavailable') na++;
     if (t.recovered) rec++;
+    if (t.archived) had++;
   }
+  if (had) hdr += `  ·  ${had} already had`;
   if (rec) hdr += `  ·  ${rec} recovered`;
   if (bad) hdr += `  ·  ${bad} failed`;
   if (na) hdr += `  ·  ${na} unavailable`;

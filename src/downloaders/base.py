@@ -96,6 +96,15 @@ class BaseDownloader(ABC):
             r'\[download\]\s+Destination:\s+(.+\.mp3)\s*$', re.IGNORECASE)
         re_yt_dest_intermediate = re.compile(r'\[download\]\s+Destination:\s+(.+)')
         re_scdl_track = re.compile(r'\[(\d+)/(\d+)\].*Downloading')
+        # A track the download archive already has — i.e. a resume skipping
+        # what an earlier run finished. yt-dlp prints this INSTEAD of the
+        # "Downloading item N of M" line for that entry:
+        #   [download] 123456789: Some Title has already been recorded in the archive
+        # so these are the only marker that the playlist position moved on.
+        re_yt_archived = re.compile(
+            r'^\[download\]\s+(?:(\d+):\s*)?(.*?)\s*'
+            r'has already been recorded in the archive\s*$'
+        )
         # spotdl titles can still arrive without a closing quote if any TUI
         # wrapping occurs, so the closing quote is optional and a trailing
         # "  module.py:123" suffix (Rich's log location column) is trimmed.
@@ -137,7 +146,8 @@ class BaseDownloader(ABC):
         # Shared with the reader thread so the outcome can be reported even
         # when the tool exits 0 after failing most of its items.
         stats: Dict[str, Any] = stats_out if stats_out is not None else {}
-        stats.update({"item": 0, "total": 0, "errors": 0, "last_error": ""})
+        stats.update({"item": 0, "total": 0, "errors": 0, "last_error": "",
+                      "archived": 0})
         try:
             proc = subprocess.Popen(cmd, env=env, cwd=str(self.output_dir),
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -183,6 +193,22 @@ class BaseDownloader(ABC):
                                 stats["item"] = int(m.group(1))
                                 stats["total"] = int(m.group(2))
                                 cb("track", {"total": int(m.group(2)), "current": int(m.group(1))})
+                                continue
+                            # Already in the archive: the track is on disk from
+                            # an earlier run, so it counts as done rather than
+                            # as a track that never happened. yt-dlp numbers
+                            # entries including the skipped ones, so stepping
+                            # the position by one here keeps it aligned with
+                            # the item lines that resync it.
+                            m = re_yt_archived.search(line)
+                            if m:
+                                stats["item"] = int(stats.get("item", 0)) + 1
+                                stats["archived"] = int(stats.get("archived", 0)) + 1
+                                cb("track_complete", {
+                                    "index": stats["item"],
+                                    "title": (m.group(2) or "").strip(),
+                                    "archived": True,
+                                })
                                 continue
                             # Per-item failure: attribute it to whichever item
                             # is currently in flight, since these errors carry
@@ -271,6 +297,11 @@ class BaseDownloader(ABC):
 
             rc = proc.returncode
             errs, total = stats["errors"], stats["total"]
+
+            if stats["archived"]:
+                self.logger.info(
+                    f"⏭️ {name}: {stats['archived']} track(s) already downloaded "
+                    f"on an earlier run — skipped")
 
             if errs:
                 # yt-dlp/scdl exit 0 even when most items failed, which made a

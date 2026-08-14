@@ -70,6 +70,13 @@ button.danger { background: var(--red); }
 
 .muted { color: var(--muted); font-size: 0.85rem; margin-top: 8px; }
 
+/* Per-provider tallies in the parse preview. An unticked provider keeps its
+   count visible but dimmed and struck through, so it reads as "found but not
+   downloading" rather than vanishing and looking like a parse failure. */
+#parse-preview strong { color: var(--text); }
+.pp-count { white-space: nowrap; margin-right: 4px; }
+.pp-off { opacity: 0.4; text-decoration: line-through; }
+
 .status-idle { color: var(--green); font-weight: 600; }
 .status-running { color: var(--yellow); font-weight: 600; animation: pulse 1s infinite; }
 .status-error { color: var(--red); font-weight: 600; }

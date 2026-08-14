@@ -19,7 +19,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 
-from src.utils import clean_url, get_spotify_creds, provider_for, read_links
+from src.utils import clean_url, get_spotify_creds, provider_for
 from src.coordinator import Coordinator
 from src.event_bus import EventBus
 from src.web_progress import WebProgress
@@ -65,6 +65,20 @@ def parse_link_text(text: str) -> List[str]:
         if url:
             links.append(url)
     return links
+
+
+def parse_link_counts(text: str) -> Dict[str, int]:
+    """How many links of each provider the text holds, plus the total.
+
+    Shared by the saved-links response and the dashboard's live preview so the
+    preview can never disagree with what starting a job would actually pick up.
+    """
+    counts = {"spotify": 0, "youtube": 0, "soundcloud": 0}
+    for url in parse_link_text(text):
+        provider = provider_for(url)
+        if provider in counts:
+            counts[provider] += 1
+    return {**counts, "total": sum(counts.values())}
 
 
 def run_download_job(job_id: str, links: List[str], providers: List[str],
@@ -164,19 +178,17 @@ async def api_get_links():
     if DEFAULT_LINKS.is_file():
         links_text = DEFAULT_LINKS.read_text(encoding="utf-8")
 
-    parsed: Dict[str, List[str]] = {"spotify": [], "youtube": [], "soundcloud": []}
-    if DEFAULT_LINKS.is_file():
-        parsed = read_links(DEFAULT_LINKS, logging.getLogger("api"))
+    return {"text": links_text, "parsed": parse_link_counts(links_text)}
 
-    return {
-        "text": links_text,
-        "parsed": {
-            "total": sum(len(v) for v in parsed.values()),
-            "spotify": len(parsed.get("spotify", [])),
-            "youtube": len(parsed.get("youtube", [])),
-            "soundcloud": len(parsed.get("soundcloud", [])),
-        },
-    }
+
+@app.post("/api/links/parse")
+async def api_parse_links(data: Dict[str, str]):
+    """Count links in text the dashboard hasn't saved yet.
+
+    The preview re-counts as the box is typed in, so it works on the posted
+    text rather than the file on disk.
+    """
+    return {"parsed": parse_link_counts(data.get("text", ""))}
 
 
 @app.put("/api/links")

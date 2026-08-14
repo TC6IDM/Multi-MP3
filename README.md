@@ -84,6 +84,11 @@ The dashboard has four tabs:
 | **Library** | Browse downloaded playlists, play or download individual MP3s |
 | **History** | Past runs with status, exit codes, and link counts |
 
+**On the Dashboard tab:**
+
+- Under the box, a **live count** of what was recognised — `Parsed: 8 links (▶ 1 ☁ 4 ● 3)` — updates as you type or paste, without saving first.
+- Unticking a provider dims and strikes through its tally and drops it from the total, so the number always matches what pressing Start would actually download.
+
 **On the Live tab:**
 
 - Each provider (YouTube / SoundCloud / Spotify, shown with its own logo) is a collapsible section — click the header to expand or collapse.
@@ -113,6 +118,7 @@ The web UI is backed by a JSON API you can drive directly:
 |--------|----------|---------|
 | `GET` | `/api/status` | Current job state and credential check |
 | `GET` / `PUT` | `/api/links` | Read or save `links.txt` |
+| `POST` | `/api/links/parse` | Count the links in unsaved text — `{text}` → per-provider tallies |
 | `POST` | `/api/jobs` | Start a run — `{links, providers, parallel}` |
 | `GET` | `/api/jobs` | Run history |
 | `GET` | `/api/jobs/{id}` | Single run detail |
@@ -290,13 +296,27 @@ When a run ends with failed tracks, the playlist is **automatically re-run from 
 
 The archive is what makes this cheap. Without it, a resumed run would call the API once per track it already has, just to work out the filename and find the file already exists — burning the same rate limit that caused the failure. yt-dlp checks the archive against the playlist entry, which already carries the track ID from the single playlist call, so skipped tracks cost no requests at all.
 
+Archived tracks are reported to the UI as they're skipped, so a resumed playlist starts with a ✅ against everything the previous run got and its counter opens at `102/460` rather than `0/460`:
+
+```
+⏭️ scdl: 102 track(s) already downloaded on an earlier run — skipped
+```
+
 If it still can't finish, it stops and tells you where to pick up; just re-run the same link later and it resumes from there. Two passes in a row that download nothing new also stop it early, rather than waiting out attempts that aren't helping.
+
+### Failing before the first track
+
+A separate failure kills the run at startup instead of partway: scdl derives an API `client_id` by downloading soundcloud.com and its JS bundles under a fixed 30-second curl timeout, and a slow response there takes the whole playlist with it — `curl: (28) Operation timed out ... with 557020 bytes received`, before a single track.
+
+So the `client_id` is resolved here first, with a generous timeout and an on-disk cache at `downloads/.cache/soundcloud-client-id.txt`, and handed to scdl with `--client-id`; the usual run never touches soundcloud.com at startup at all. A run that still dies before its first track is retried on a short clock (10s, 30s, 60s) with a freshly fetched id, since nothing was rate-limited and there's nothing to wait out.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `SOUNDCLOUD_MAX_ATTEMPTS` | `3` | How many times to resume a partially-failed playlist |
 | `SOUNDCLOUD_RETRY_BACKOFF` | `60,300,900` | Seconds to wait before each resume |
 | `SOUNDCLOUD_AUTH_TOKEN` | — | Optional; an authenticated session gets a much higher rate limit |
+| `SOUNDCLOUD_CLIENT_ID` | — | Optional; skips the `client_id` lookup and cache entirely |
+| `SOUNDCLOUD_CLIENT_ID_TIMEOUT` | `90` | Seconds allowed for that lookup |
 
 > Deleting a playlist's file in `.archive/` forces a full re-check on the next run. Do that if you delete MP3s by hand and want them fetched again — the archive would otherwise consider them done.
 
