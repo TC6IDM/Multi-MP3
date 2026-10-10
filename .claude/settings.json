@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import py_compile; py_compile.compile\\('src/downloaders/spotify.py', doraise=True\\); py_compile.compile\\('src/downloaders/base.py', doraise=True\\); py_compile.compile\\('src/downloaders/soundcloud.py', doraise=True\\); py_compile.compile\\('src/coordinator.py', doraise=True\\); py_compile.compile\\('web_app.py', doraise=True\\); print\\('All Python OK'\\)\")"
+    ]
+  }
+}
