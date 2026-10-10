@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 try:
     from rich.console import Console
@@ -51,23 +51,32 @@ class DownloadProgress:
         if self._progress:
             self._progress.stop()
 
-    def link_started(self, provider: str, link: str, name: str, total_tracks: int = 0) -> None:
-        """Called when a single link begins downloading. No-op in CLI TUI."""
+    def link_started(self, provider: str, link: str, name: str, total_tracks: int = 0,
+                     queued: bool = False) -> None:
+        """Called when a link is resolved (queued=True) and again when its first
+        track starts downloading. No-op in CLI TUI."""
         pass
+
+    def provider_status(self, provider: str, kind: str, data: dict[str, Any]) -> None:
+        """Rate-limiter news for a provider lane ("rate" or "cooldown")."""
+        if kind == "cooldown" and self._console:
+            self._console.print(
+                f"[yellow]⏳ {provider}: cooling down {data.get('seconds')}s, "
+                f"then {data.get('rate')} tracks/min[/]")
 
     def link_complete(self, provider: str, link: str, name: str, code: int) -> None:
         """Called when a single link finishes downloading. No-op in CLI TUI."""
         pass
 
-    def track_progress(self, provider: str, link: str, event: str, data: Dict[str, Any]) -> None:
+    def track_progress(self, provider: str, link: str, event: str, data: dict[str, Any]) -> None:
         """Called for per-track progress events from subprocess output. No-op in CLI TUI."""
         pass
 
-    def link_metadata(self, provider: str, link: str, tracks: List[Dict[str, Any]]) -> None:
+    def link_metadata(self, provider: str, link: str, tracks: list[dict[str, Any]]) -> None:
         """Provide the full track list for a playlist (e.g. from Spotify API). No-op in CLI TUI."""
         pass
 
-    def __enter__(self) -> "DownloadProgress":
+    def __enter__(self) -> DownloadProgress:
         self.start()
         return self
 
@@ -92,7 +101,7 @@ class DownloadProgress:
         if self._progress and name in self._tasks:
             self._progress.update(self._tasks[name], description=description)
 
-    def print_summary(self, title: str, items: List[str]) -> None:
+    def print_summary(self, title: str, items: list[str]) -> None:
         """Print a summary table to the console."""
         if not self._console:
             return

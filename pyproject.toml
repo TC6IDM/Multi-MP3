@@ -1,34 +1,51 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "multi-mp3"
-version = "1.0.0"
-description = "Dockerized CLI tool to download music from Spotify, YouTube, and SoundCloud"
+version = "2.0.0"
+description = "Download Spotify, YouTube, and SoundCloud playlists to MP3 — CLI and web UI"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
+# spotdl is deliberately NOT listed: every spotdl release pins fastapi<0.104,
+# uvicorn<0.24 and rich<14, which would freeze the web stack years behind. It
+# is only ever run as a subprocess, so it lives in its own virtualenv
+# (.venv-spotdl, or /opt/spotdl in Docker), pinned by requirements-spotdl.txt.
+# Everything here is pinned exactly by uv.lock.
 dependencies = [
-    "spotdl>=4.0.0",
-    "spotipy>=2.24.0",
-    "python-dotenv>=1.0.0",
-    "yt-dlp>=2024.0.0",
-    "scdl>=2.0.0",
-    "psutil>=5.9.0",
-    "rich>=13.0.0",
+    # [default] brings yt-dlp-ejs (YouTube's JS challenge solver); [curl-cffi]
+    # brings the TLS impersonation SoundCloud's homepage wants, at a version
+    # yt-dlp has actually tested against.
+    "yt-dlp[default,curl-cffi]>=2026.8.19",
+    # The JS runtime yt-dlp-ejs drives. The official wheel puts a deno binary
+    # inside the venv, so native runs no longer need a separate install.
+    "deno>=2.9,<3",
+    # Tag editing for tracks copied between playlists, and spotting files
+    # spotdl was killed in the middle of writing.
+    "mutagen>=1.47,<2",
+    "python-dotenv>=1.2,<2",
+    "psutil>=7.2,<8",
+    "rich>=15,<16",
 ]
 
 [project.optional-dependencies]
 web = [
-    "fastapi>=0.110.0",
-    "uvicorn[standard]>=0.29.0",
-    "jinja2>=3.1.0",
-    "python-multipart>=0.0.9",
-    "aiofiles>=23.0.0",
+    "fastapi>=0.143,<1",
+    "uvicorn[standard]>=0.54,<1",
+    "jinja2>=3.1.6,<4",
 ]
 dev = [
-    "ruff>=0.4.0",
-    "mypy>=1.8.0",
-    "black>=24.0.0",
-    "pytest>=8.0.0",
+    "ruff>=0.17",
+    "mypy>=2.4",
+    "pytest>=8.4",
+    "httpx2>=2.13",  # starlette 1.x's TestClient (plain httpx is deprecated there)
 ]
+
+[tool.setuptools]
+packages = ["src", "src.downloaders"]
+py-modules = ["main", "web_app"]
 
 [tool.ruff]
 target-version = "py312"

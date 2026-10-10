@@ -1,0 +1,19 @@
+# Without this every build shipped the whole music library (10k+ files) and
+# both virtualenvs to the Docker daemon as build context.
+downloads/
+.venv/
+.venv-spotdl/
+.git/
+.github/
+.claude/
+.spotdl/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+**/__pycache__/
+*.pyc
+.env
+links.txt
+examplecmd.py
+tests/
+docs/

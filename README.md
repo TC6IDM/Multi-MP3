@@ -1,131 +1,112 @@
 # Multi-MP3 — Playlist Downloader (Spotify / YouTube / SoundCloud)
 
-Download music from **Spotify** (playlists, albums, tracks, artists), **YouTube** (playlists, channels), and **SoundCloud** (playlists) into a local `downloads/` folder — with consistent naming, parallel downloads, and missing-track reporting.
+Keep **Spotify** (playlists, albums, tracks, artists), **YouTube** (playlists, channels) and **SoundCloud** (playlists) downloaded as clean, tagged MP3s in a local `downloads/` folder.
+
+- All three services download at the same time.
+- A rate limiter knows when to back off.
+- A per-track record means every run only fetches what's missing.
+- A track that's in several playlists is downloaded once.
 
 Two ways to run it:
 
 | Interface | Best for | Quick start |
 |-----------|----------|-------------|
-| 🌐 **Web UI** | Watching progress live, browsing your library | `docker compose up -d --build web` → <http://localhost:8080> |
-| ⌨️ **CLI** | Scripting, cron jobs, headless servers | `./run.sh links.txt` |
+| 🌐 **Web UI** | Managing links, watching progress, browsing your library | `docker compose up -d --build web` → <http://localhost:8080> |
+| ⌨️ **CLI** | Scripting, scheduled runs, headless servers | `./run.sh links.txt` |
 
 ---
 
 ## Quick Start
 
-**1. Add Spotify credentials** — create a `.env` file in the project root:
-
-```env
-CLIENTID=your_spotify_client_id
-CLIENTSECRET=your_spotify_client_secret
-```
-
-Get these from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) (create an app; any redirect URI works).
-
-**2. Add your links** to `links.txt` (one per line):
+**1. Add your links** to `links.txt` (one per line), or paste them into the web UI's **Links** tab:
 
 ```text
-# Comments are ignored
-https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M
-[My Mix](https://open.spotify.com/playlist/...)
-https://www.youtube.com/playlist?list=PLxxxxxx
-https://soundcloud.com/user/sets/my-playlist
+# Comments and blank lines are kept as they are
+https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M Speed Garage
+[My Mix](https://www.youtube.com/playlist?list=PLxxxxxx)
+https://soundcloud.com/user/sets/my-playlist gym
+#https://soundcloud.com/user/sets/old-one   ← a leading # switches a link off
 ```
 
-**3. Run it** — pick the Web UI or CLI below.
+**2. Run it** with the Web UI or the CLI below.
+
+No accounts or API keys are needed: spotdl reads Spotify without a developer app. Everything in `.env` is optional; see [`.env-example`](.env-example).
 
 ---
 
 ## 🌐 Running the Web UI
 
-The web interface gives you live per-playlist progress, expandable track lists, a file browser, and run history.
-
-### Start it
-
 ```bash
-docker compose up -d --build web
-```
-
-Then open **<http://localhost:8080>**.
-
-To stop it:
-
-```bash
-docker compose down
-```
-
-To follow server logs:
-
-```bash
-docker compose logs -f web
+docker compose up -d --build web     # then open http://localhost:8080
+docker compose logs -f web           # follow the server log
+docker compose down                  # stop
 ```
 
 ### Without Docker
 
-```bash
-python -m venv .venv
-# Windows:  .venv\Scripts\Activate.ps1
-# Linux/Mac: source .venv/bin/activate
+The app and spotdl live in **two separate environments**. Every spotdl release pins old versions of `fastapi`, `uvicorn` and `rich`, which would hold the web app back if they shared one. The app only ever runs spotdl as a separate program. [uv](https://docs.astral.sh/uv/) installs exactly the versions pinned in `uv.lock` and `requirements-spotdl.txt`:
 
-pip install -e ".[web]"
-uvicorn web_app:app --host 0.0.0.0 --port 8080
+```powershell
+uv sync --extra web                                        # the app → .venv
+uv venv .venv-spotdl
+uv pip install --python .venv-spotdl -r requirements-spotdl.txt
+.venv\Scripts\uvicorn web_app:app --host 0.0.0.0 --port 8080
 ```
 
-> Requires `ffmpeg` and [Deno](https://deno.land) on your PATH. Deno is needed by `yt-dlp` for YouTube's JavaScript challenge — without it you get HTTP 403 errors.
+(No uv? Plain pip works too: `pip install -e ".[web]"` into one venv, and `pip install -r requirements-spotdl.txt` into `.venv-spotdl`.)
 
-### Using the interface
+The app finds `.venv-spotdl` by itself; set `SPOTDL_BIN` if spotdl lives elsewhere. `ffmpeg` must be on your PATH. **Deno**, which yt-dlp needs for YouTube's JavaScript challenge, comes as a pip package, so there's nothing else to install.
 
-The dashboard has four tabs:
+### The tabs
 
-| Tab | What it does |
-|-----|--------------|
-| **Dashboard** | Paste links, pick providers, toggle parallel mode, start a run |
-| **Live** | Real-time progress — expandable provider sections with per-playlist cards |
-| **Library** | Browse downloaded playlists, play or download individual MP3s |
-| **History** | Past runs with status, exit codes, and link counts |
+| Tab | What it's for |
+|-----|---------------|
+| **Links** | Your playlists. Add by pasting a link, rename with a label, switch one off without deleting it, and see at a glance which are up to date (`Up to date · 182`, `14 left of 182`, `New`). Pick providers and a **Speed**, then **Download**. *Edit links.txt as text* is there for bulk changes. |
+| **Live** | The run in progress: one section per provider with its download rate or rate-limit countdown, one row per playlist, and every track's state (downloaded, downloading, to do, failed with the reason, unavailable). **Refreshing the page mid-run rebuilds all of it**, and other tabs or devices can watch the same run. |
+| **Library** | Every playlist with its cover, progress, size and failures. **Resume**, **Retry failed**, **Reset**, search, and **Failed tracks**: everything that couldn't be downloaded, why, and YouTube/SoundCloud search links to find it by hand. Click a playlist to play it in the browser. |
+| **History** | Past runs: result, tracks done/failed/left, speed, and how long they took. |
+| **System** | Versions, a one-click **yt-dlp update**, notifications, and leftover cleanup. |
 
-**On the Dashboard tab:**
+**Starting a run while one is going queues it.** It starts automatically when the current one finishes, and you can drop it from *Up next* on the Live tab. Only one run downloads at a time on purpose: two at once would double the request rate the limiters manage.
 
-- Under the box, a **live count** of what was recognised — `Parsed: 8 links (▶ 1 ☁ 4 ● 3)` — updates as you type or paste, without saving first.
-- Unticking a provider dims and strikes through its tally and drops it from the total, so the number always matches what pressing Start would actually download.
+**Stop run really stops.** Tracks that are mid-download are dropped, everything finished is saved, and the rest stays recorded as still to do.
 
-**On the Live tab:**
+### Notifications
 
-- Each provider (YouTube / SoundCloud / Spotify, shown with its own logo) is a collapsible section — click the header to expand or collapse.
-- Inside are **playlist cards** showing the playlist name, a track progress bar, and current status.
-- **Click a card** to expand its full track list — every track shows ✅ downloaded, 🔄 downloading, or ⏳ pending.
-- Click **📜 Log** on a card to see the subprocess output for *that playlist only*, instead of one giant merged log.
-- All playlists appear immediately as ⏸ Queued when the run starts, so you can see the whole plan up front.
+- **Browser:** allow notifications (System tab, or when you first press Download). You'll get one when a run finishes while the tab is in the background.
+- **Phone:** set `NOTIFY_URL` to an [ntfy](https://ntfy.sh) topic (`https://ntfy.sh/<your-topic>`, then subscribe to it in the ntfy app) or a Discord webhook URL. *System → Send a test* checks it works.
 
 ### Configuration
-
-Set via environment variables (or in `docker-compose.yml`):
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `OUTPUT_DIR` | `downloads` | Where MP3s are written |
-| `LINKS_FILE` | `links.txt` | Default links file loaded into the editor |
-| `CLIENTID` | — | Spotify client ID (required) |
-| `CLIENTSECRET` | — | Spotify client secret (required) |
+| `LINKS_FILE` | `links.txt` | The links file the Links tab edits |
+| `NOTIFY_URL` | — | ntfy topic or Discord webhook for "run finished" pings |
+| `WEB_USERNAME` / `WEB_PASSWORD` | — | Require a login. The server listens on your whole network |
+| `SPOTDL_BIN` / `SPOTDL_PYTHON` | auto | Where spotdl and its environment's Python are |
+| `CLIENTID` / `CLIENTSECRET` | — | Optional Spotify developer app, passed to spotdl (its owner needs Premium) |
 
-Change the port by editing the `ports` mapping in `docker-compose.yml` (e.g. `"9000:8080"`).
+Speed tuning is covered under [Speed and rate limiting](#speed-and-rate-limiting). Change the port with the `ports` mapping in `docker-compose.yml`.
 
 ### REST API
 
-The web UI is backed by a JSON API you can drive directly:
-
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| `GET` | `/api/status` | Current job state and credential check |
-| `GET` / `PUT` | `/api/links` | Read or save `links.txt` |
-| `POST` | `/api/links/parse` | Count the links in unsaved text — `{text}` → per-provider tallies |
-| `POST` | `/api/jobs` | Start a run — `{links, providers, parallel}` |
-| `GET` | `/api/jobs` | Run history |
-| `GET` | `/api/jobs/{id}` | Single run detail |
-| `DELETE` | `/api/jobs/{id}` | Cancel the running job |
-| `GET` | `/api/jobs/{id}/events` | SSE stream of live progress |
-| `GET` | `/api/files` | Browse the output directory |
-| `GET` | `/api/files/{path}/download` | Stream an MP3 |
+| `GET` | `/api/status` | Running job, queue, tooling checks |
+| `GET` / `PUT` | `/api/links` | links.txt as text and as entries (with each playlist's sync state). `PUT` takes `{text}` or `{entries}` |
+| `POST` | `/api/links/parse` | Count the links in unsaved text |
+| `POST` | `/api/jobs` | Start (or queue) a run: `{links, providers, speed}` |
+| `GET` | `/api/jobs`, `/api/jobs/{id}` | History / one run |
+| `DELETE` | `/api/jobs/{id}` | Stop the running job, or remove a queued one |
+| `GET` | `/api/jobs/{id}/events` | SSE stream, replayable from the start; honours `Last-Event-ID` |
+| `GET` | `/api/library` | Playlists with progress, size and cover |
+| `GET` | `/api/state`, `/api/state/{provider}/{key}` | Progress records |
+| `POST` | `/api/state/reset` | Forget progress: `{targets: [{provider, key}]}`, or `{}` for all |
+| `POST` | `/api/state/retry` | Give failed and unavailable tracks another go |
+| `GET` | `/api/report/failed`, `/api/report/failed.txt` | Everything that couldn't be downloaded, with search links |
+| `GET` / `POST` | `/api/system`, `/api/system/update-ytdlp`, `/api/system/cleanup`, `/api/system/test-notification` | Maintenance |
+| `GET` | `/api/files`, `/api/files/{path}/download`, `/api/covers/{name}` | File browser, MP3 streaming, cover art |
 
 Interactive docs are served at `/docs`.
 
@@ -133,59 +114,13 @@ Interactive docs are served at `/docs`.
 
 ## ⌨️ Running from the Command Line
 
-### With the wrapper scripts (builds the image for you)
-
-**Bash:**
-
 ```bash
-chmod +x run.sh
-./run.sh                      # uses links.txt
-./run.sh links.txt            # explicit input file
-./run.sh links.txt --parallel # parallel downloads
-```
-
-**PowerShell:**
-
-```powershell
-./run.ps1                              # uses links.txt
+./run.sh                        # Docker: builds the image, uses links.txt
+./run.sh links.txt --speed fast
 ./run.ps1 -InputFile "links.txt"
-./run.ps1 -InputFile "links.txt" -Parallel
-```
-
-Both scripts build the image, create `./downloads`, mount your config and links, and run the CLI.
-
-### With docker compose
-
-```bash
 docker compose --profile cli run --rm cli
+python main.py links.txt downloads/        # without Docker (see setup above)
 ```
-
-### With plain Docker
-
-```bash
-docker build -t playlist-downloader .
-
-docker run --rm \
-  -v "$(pwd)/.spotdl:/root/.config/spotdl" \
-  -v "$(pwd)/links.txt:/app/input_links.txt:ro" \
-  -v "$(pwd)/downloads:/app/music" \
-  -v "$(pwd)/.env:/app/.env:ro" \
-  playlist-downloader \
-  input_links.txt /app/music --parallel
-```
-
-### Without Docker
-
-```bash
-python -m venv .venv
-# Windows:  .venv\Scripts\Activate.ps1
-# Linux/Mac: source .venv/bin/activate
-
-pip install -e .
-python main.py links.txt downloads/ --parallel
-```
-
-### CLI reference
 
 ```
 python main.py [input] [output] [options]
@@ -193,44 +128,14 @@ python main.py [input] [output] [options]
 
 | Argument / Flag | Default | Description |
 |-----------------|---------|-------------|
-| `input` (positional) | `links.txt` | File containing links |
-| `output` (positional) | `downloads` | Output directory |
-| `-i`, `--input-file` | — | Override the input file |
-| `-o`, `--output-dir` | — | Override the output directory |
-| `-p`, `--parallel` | off | Run providers and links concurrently (off = fully sequential) |
-| `--max-workers N` | `4` | Concurrency limit when `--parallel` is set |
+| `input` / `output` | `links.txt` / `downloads` | Links file / output directory (`-i` / `-o` also work) |
+| `-s`, `--speed` | `balanced` | `careful`, `balanced` or `fast` |
+| `-p`, `--parallel` | — | Kept for old scripts; same as `--speed balanced` |
+| `--max-workers N` | per speed | Tracks (SoundCloud/YouTube) or playlists (Spotify) each provider works on at once |
 | `--providers ...` | `all` | Any of `spotify`, `youtube`, `soundcloud`, `all` |
 | `--tui` | off | Rich progress bars in the terminal |
 
-**Examples:**
-
-```bash
-# Everything in links.txt, sequentially
-python main.py
-
-# Parallel, 8 workers, with progress bars
-python main.py links.txt downloads/ --parallel --max-workers 8 --tui
-
-# Only Spotify and YouTube
-python main.py --providers spotify youtube
-
-# Custom paths via flags
-python main.py -i my-links.txt -o /media/music --parallel
-```
-
----
-
-## Input File Format
-
-One link per line. Blank lines and `#` comments are ignored. Both plain URLs and Markdown links work.
-
-| Provider | Plain URL | Markdown |
-|----------|-----------|----------|
-| Spotify | `https://open.spotify.com/playlist/...` | `[name](https://open.spotify.com/playlist/...)` |
-| YouTube | `https://www.youtube.com/playlist?list=...` | `[name](https://youtube.com/...)` |
-| SoundCloud | `https://soundcloud.com/user/sets/...` | `[name](https://soundcloud.com/...)` |
-
-Spotify albums, tracks, and artist pages are supported alongside playlists.
+Ctrl-C stops cleanly: finished tracks are saved and the rest stay to do.
 
 ---
 
@@ -238,209 +143,143 @@ Spotify albums, tracks, and artist pages are supported alongside playlists.
 
 ```
 downloads/
-├── My Spotify Playlist/
-│   ├── 01 Artist - Song.mp3
-│   └── 02 Artist - Another Song.mp3
-├── My YouTube Playlist/
-│   └── 01 Uploader - Video Title.mp3
-├── .metadata/          # Aggregated playlist JSON
-├── .icons/             # Playlist cover art
-├── .errors/            # Per-run error files
-├── .archive/           # Per-playlist SoundCloud resume state
-├── .web/               # Web UI job history
-└── spotdl.log          # Full run log
+├── My Spotify Playlist/01 Song - Artist.mp3
+├── My YouTube Playlist/01 Uploader - Video Title.mp3
+├── My SoundCloud Set/0001 Uploader - Track.mp3
+├── .state/       # progress records: one JSON file per playlist
+├── .metadata/    # playlist info
+├── .icons/       # cover art
+├── .cache/       # SoundCloud client id, learned rate limits, yt-dlp cache
+├── .partial/     # downloads in progress; old copies kept safe during a re-download
+├── .errors/      # spotdl error lists
+├── .web/         # web UI job history
+└── spotdl.log    # CLI log
 ```
 
 | Provider | Naming template |
 |----------|-----------------|
-| Spotify | `{list-name}/{list-position} {title} - {artists}.mp3` |
+| Spotify playlist | `{list-name}/{list-position} {title} - {artists}.mp3` |
+| Spotify album | `{list-name}/{track-number} {title} - {artists}.mp3` |
 | YouTube | `%(playlist_title)s/%(playlist_index)02d %(uploader)s - %(title)s.mp3` |
 | SoundCloud | `%(playlist)s/%(playlist_index)04d %(uploader)s - %(title)s.mp3` |
 
----
-
-## Parallelism
-
-With `--parallel` set (the Web UI's **Parallel** checkbox, on by default), downloads run concurrently at three levels:
-
-1. **Across providers** — Spotify, YouTube, and SoundCloud run at the same time.
-2. **Within a provider** — multiple playlists download concurrently, bounded by `--max-workers`.
-3. **Within a playlist** — `spotdl` and `yt-dlp` use their own internal worker pools for individual tracks.
-
-**Turn it off and the entire run is single-threaded** — one provider, then the next; one playlist at a time; one track at a time. That is the setting to use for large SoundCloud runs: SoundCloud rate-limits by IP, and once tripped it rejects the cached `client_id` *and* blocks the refresh request, so every remaining track fails with 403. SoundCloud requests are additionally paced within a playlist (`--sleep-requests`, `--concurrent-fragments 1`, exponential retry backoff), so a serial run is slower but actually finishes.
-
-Cleanup is deliberately deferred until all downloads finish. Running it earlier would let one playlist's metadata scan race against another's in-flight writes.
-
-Logs include thread names, so you can confirm parallel execution:
-
-```
-2026-08-08 12:00:01 | INFO | ThreadPoolExecutor-0_1 | 🎵 yt-dlp: https://...
-2026-08-08 12:00:01 | INFO | ThreadPoolExecutor-0_2 | 🎵 SpotDL: https://...
-```
+SoundCloud files are tagged with the playlist as album and the position as track number, so a playlist stays together when you import it into Apple Music (for example with CopyTrans).
 
 ---
 
-## Resuming a Failed SoundCloud Playlist
+## Speed and rate limiting
 
-SoundCloud rate-limits by IP, and a long playlist can hit the wall partway through — the run doesn't crash, it just fails every remaining track with 403 while still exiting 0.
+Spotify, YouTube and SoundCloud always run **at the same time**. They're different services, so there's no reason for one to wait. Each then sets its own pace.
 
-Each SoundCloud playlist gets a **download archive** at `downloads/.archive/<playlist>-<hash>.txt` recording the track IDs it has successfully downloaded. Only successful downloads are recorded, so failures are always retried.
+**SoundCloud and YouTube** run through yt-dlp inside the app, with a pool of workers per provider downloading in parallel. **One shared rate limiter** decides when the next track may start, across every playlist in the run:
 
-When a run ends with failed tracks, the playlist is **automatically re-run from where it stopped**, after a wait for the rate limit to clear:
+- After each stretch of clean downloads it raises the rate a little, so it finds the real limit instead of guessing.
+- When the service refuses (HTTP 429/403, or YouTube's "confirm you're not a bot"), it **halves the rate and pauses every worker at once**. It waits as long as the service asks, or else 60 seconds, then 180, then 600.
+- It remembers the rate it settled on, and the next run starts just below it.
+- If the service is still refusing after five cooldowns in a row, it stops. Everything not yet downloaded stays recorded as still to do.
 
-```
-⏳ 358 track(s) failed after 102 new this pass — waiting 60s for the rate limit to clear, then resuming.
-▶️ Resuming — 102 track(s) already done, skipping those (attempt 2/3)
-✅ Resume complete — 460 track(s) downloaded in total
-```
+**Spotify** runs through spotdl, with several playlists at once and spotdl's own threads. spotdl hands the app the playlist's song list as soon as it has read it. The app answers with the songs already done, so spotdl only works on what's missing. A 135-track playlist that's already downloaded is checked in about 20 seconds.
 
-The archive is what makes this cheap. Without it, a resumed run would call the API once per track it already has, just to work out the filename and find the file already exists — burning the same rate limit that caused the failure. yt-dlp checks the archive against the playlist entry, which already carries the track ID from the single playlist call, so skipped tracks cost no requests at all.
+| Speed | SoundCloud | YouTube | Spotify |
+|-------|-----------|---------|---------|
+| `careful` | 1 worker, 8 tracks/min | 1 worker, 15/min | 1 playlist, 3 threads |
+| `balanced` (default) | 3 workers, starts at 20/min (max 40) | 3 workers, 30/min (max 60) | 2 playlists, 6 threads |
+| `fast` | 4 workers, 30/min (max 60) | 4 workers, 45/min (max 90) | 3 playlists, 8 threads |
 
-Archived tracks are reported to the UI as they're skipped, so a resumed playlist starts with a ✅ against everything the previous run got and its counter opens at `102/460` rather than `0/460`:
-
-```
-⏭️ scdl: 102 track(s) already downloaded on an earlier run — skipped
-```
-
-If it still can't finish, it stops and tells you where to pick up; just re-run the same link later and it resumes from there. Two passes in a row that download nothing new also stop it early, rather than waiting out attempts that aren't helping.
-
-### Failing before the first track
-
-A separate failure kills the run at startup instead of partway: scdl derives an API `client_id` by downloading soundcloud.com and its JS bundles under a fixed 30-second curl timeout, and a slow response there takes the whole playlist with it — `curl: (28) Operation timed out ... with 557020 bytes received`, before a single track.
-
-So the `client_id` is resolved here first, with a generous timeout and an on-disk cache at `downloads/.cache/soundcloud-client-id.txt`, and handed to scdl with `--client-id`; the usual run never touches soundcloud.com at startup at all. A run that still dies before its first track is retried on a short clock (10s, 30s, 60s) with a freshly fetched id, since nothing was rate-limited and there's nothing to wait out.
+Fine-tune the balanced preset (`fast` is derived from it; `careful` ignores these):
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `SOUNDCLOUD_MAX_ATTEMPTS` | `3` | How many times to resume a partially-failed playlist |
-| `SOUNDCLOUD_RETRY_BACKOFF` | `60,300,900` | Seconds to wait before each resume |
-| `SOUNDCLOUD_AUTH_TOKEN` | — | Optional; an authenticated session gets a much higher rate limit |
-| `SOUNDCLOUD_CLIENT_ID` | — | Optional; skips the `client_id` lookup and cache entirely |
-| `SOUNDCLOUD_CLIENT_ID_TIMEOUT` | `90` | Seconds allowed for that lookup |
-
-> Deleting a playlist's file in `.archive/` forces a full re-check on the next run. Do that if you delete MP3s by hand and want them fetched again — the archive would otherwise consider them done.
-
----
-
-## Missing Track Detection
-
-After downloading, each provider's `cleanup()`:
-
-1. Aggregates metadata JSON into `.metadata/<playlist>.json`
-2. Scans the playlist folder for numbered files (`01.mp3`, `02.mp3`, …)
-3. Compares against the expected track count from metadata
-4. Logs anything absent:
-
-```
-⚠️ 2 missing in My Playlist:
-  🚫 Missing 03
-  🚫 Missing 07
-```
-
-Spotify playlists longer than 100 tracks are paginated automatically — the API caps each page at 100, so the full list is fetched across multiple requests.
+| `SOUNDCLOUD_WORKERS` / `YOUTUBE_WORKERS` | 3 | Tracks in flight at once |
+| `SOUNDCLOUD_RATE` / `YOUTUBE_RATE` | 20 / 30 | Starting tracks per minute (overrides the learned rate) |
+| `SOUNDCLOUD_MAX_RATE` / `YOUTUBE_MAX_RATE` | 40 / 60 | Ceiling for the adaptive rate |
+| `SOUNDCLOUD_MAX_ATTEMPTS` / `YOUTUBE_MAX_ATTEMPTS` | 3 | Tries per track before it's recorded as failed |
+| `SPOTIFY_WORKERS` / `SPOTIFY_THREADS` | 2 / 6 | Playlists at once / spotdl `--threads` |
+| `SOUNDCLOUD_AUTH_TOKEN` | — | Optional OAuth token. A signed-in session gets much higher limits |
+| `SOUNDCLOUD_CLIENT_ID` / `SOUNDCLOUD_CLIENT_ID_TIMEOUT` | — / 90 | Skip, or allow more time for, the client-id lookup |
 
 ---
 
-## Configuration Files
+## Progress records, resume, reset
 
-### `.env` (required)
+Every playlist has a record at `downloads/.state/<provider>/<playlist>.json` listing each track as **done**, **failed**, **still to do**, or **unavailable** (removed, private or region-locked). Each track is written to the record the moment it finishes, so a run that dies partway leaves an exact list of what's left.
 
-```env
-CLIENTID=your_spotify_client_id
-CLIENTSECRET=your_spotify_client_secret
-```
+- **Resume** by running the same link again, or with **Resume** in the Library. Finished tracks cost nothing.
+- **Delete an MP3** and the next run fetches it again.
+- **The same song in two playlists** is downloaded once and copied into the second, re-tagged for that playlist.
+- **Retry failed** gives failed and unavailable tracks another go. Runs otherwise skip unavailable ones so they don't cost a request every time.
+- **Reset** (per playlist, or **Reset all**) makes the next run **re-download every track and overwrite the existing MP3s**. Old files stay in place until each replacement has *completely* downloaded, so a reset run that's stopped or rate-limited never leaves you with fewer files.
+- **Upgrading:** the first time a playlist is seen, files already on disk (and the old `.archive/` files) count as done, so nothing you have is fetched again.
 
-### `.spotdl/config.json` (optional)
+---
 
-Copy `.spotdl/config.example.json` → `.spotdl/config.json` to get started:
+## Maintenance
 
-```json
-{
-  "bitrate": "256k",
-  "format": "mp3",
-  "overwrite": "skip",
-  "threads": 4,
-  "log_level": "INFO"
-}
-```
-
-Mounted as a volume, so it persists between runs.
-
-> **Note:** `.spotdl/config.json` is gitignored — it can hold API tokens. Never commit it.
+- **yt-dlp** breaks whenever a site changes, and fixes ship within days. *System → Update yt-dlp* upgrades it for the app and for spotdl's environment; restart the app afterwards. Everything else is pinned exactly by `uv.lock` (app) and `requirements-spotdl.txt` (spotdl).
+- **Cleanup** (*System → Clean up leftovers*, also run at startup) removes finished jobs' input files, old spotdl error lists and interrupted downloads. Music and records are never touched.
 
 ---
 
 ## Project Structure
 
 ```
-├── main.py                 # CLI entrypoint (argparse)
-├── web_app.py              # FastAPI web app
-├── Dockerfile              # CLI image
-├── Dockerfile.web          # Web UI image
-├── docker-compose.yml      # web + cli services
-├── run.sh / run.ps1        # CLI wrapper scripts
-├── links.txt               # Your links
+├── main.py / web_app.py          # CLI / FastAPI app
+├── Dockerfile / Dockerfile.web   # Python 3.13 + uv images
+├── pyproject.toml / uv.lock      # app dependencies, pinned
+├── requirements-spotdl.txt       # spotdl's environment, pinned
 ├── src/
-│   ├── coordinator.py      # Orchestrates providers, manages threading
-│   ├── models.py           # Song, Playlist
-│   ├── utils.py            # Logging, link parsing, credentials
-│   ├── tui.py              # Rich progress display
-│   ├── event_bus.py        # Thread-safe bridge to SSE streaming
-│   ├── web_progress.py     # Progress events for the web UI
-│   ├── web_handler.py      # Log handler feeding the SSE stream
-│   ├── job_manager.py      # Job lifecycle and history
+│   ├── coordinator.py            # one lane per provider, all at once; Spotify flow
+│   ├── state.py                  # per-playlist progress records
+│   ├── ratelimit.py              # shared adaptive rate limiter
+│   ├── dedupe.py                 # download each track once, copy into other playlists
+│   ├── links.py                  # links.txt ↔ the Links tab, keeping its shape
+│   ├── settings.py               # speed presets + environment overrides
+│   ├── event_bus.py              # replayable event log behind the live stream
+│   ├── job_manager.py            # job lifecycle, queue, history
+│   ├── notify.py                 # ntfy / Discord notifications
+│   ├── maintenance.py            # versions, yt-dlp update, cleanup
 │   └── downloaders/
-│       ├── base.py         # Shared download/cleanup logic
-│       ├── spotify.py      # spotdl + spotipy
-│       ├── youtube.py      # yt-dlp
-│       └── soundcloud.py   # scdl
-├── templates/              # Jinja2 templates
-└── static/                 # CSS
+│       ├── ytdlp_engine.py       # in-app yt-dlp worker pool (SoundCloud + YouTube)
+│       ├── soundcloud.py / youtube.py
+│       ├── spotify.py            # spotdl + records against disk
+│       ├── spotdl_runner.py      # spotdl with the track-list handshake
+│       └── base.py               # subprocess runner, YouTube-search recovery
+├── templates/ static/            # UI (fonts self-hosted in static/fonts)
+├── tests/                        # pytest, offline
+└── docs/design-audit.md          # UI audit and what was fixed
 ```
-
----
-
-## Requirements
-
-**Host:** Docker Desktop or Docker Engine. (Python 3.12+ if running without Docker.)
-
-**In the image:** Python 3.12-slim, `ffmpeg`, [Deno](https://deno.land), and the Python packages `spotdl`, `spotipy`, `yt-dlp`, `scdl`, `psutil`, `rich`, `python-dotenv` — plus `fastapi`, `uvicorn`, and `jinja2` for the web image.
 
 ---
 
 ## Troubleshooting
 
 **YouTube downloads fail with HTTP 403**
-`yt-dlp` needs a JavaScript runtime for YouTube's challenge. The Docker images install Deno automatically; if running natively, install Deno and make sure it's on your PATH.
+yt-dlp needs Deno. It's installed with the app's packages, so check the app's environment is the one you start it from. The Links tab warns if Deno can't be found.
 
-**`Missing Spotify credentials`**
-Check that `.env` exists in the project root with `CLIENTID` and `CLIENTSECRET`, and that it's mounted into the container.
+**SoundCloud keeps cooling down**
+Try **Careful**, lower `SOUNDCLOUD_RATE`, or set `SOUNDCLOUD_AUTH_TOKEN`. Progress is never lost; a later run continues from exactly where this one stopped.
 
-**Spotify playlist stops at 100 tracks**
-Fixed — the API paginates at 100 items per page and the downloader now fetches all pages. If you still see this, confirm you're on a rebuilt image.
+**Something stopped working after a site change**
+*System → Update yt-dlp*, then restart.
 
-**Web UI shows no progress**
-Hard-refresh the browser (Ctrl+Shift+R) to clear cached JS/CSS after rebuilding.
-
-**Port 8080 already in use**
-Edit the `ports` mapping in `docker-compose.yml`, e.g. `"9000:8080"`.
+**Web UI looks stale after updating**
+Hard-refresh the browser (Ctrl+Shift+R).
 
 ---
 
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-
-ruff check src/ main.py web_app.py     # lint
-mypy src/ main.py web_app.py           # type check
-pytest                                  # tests
+uv sync --extra web --extra dev
+uv run pytest -q                                      # ~3s, offline
+uv run ruff check src/ main.py web_app.py tests/
+uv run mypy src/ main.py web_app.py --ignore-missing-imports
 ```
 
-CI runs lint, type checks, and builds both Docker images on push.
+CI runs lint, type checks and tests on Python 3.13, and builds both Docker images. `CLAUDE.md` has the architecture notes and the problems each provider has caused so far.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). Bundled fonts (Bricolage Grotesque, JetBrains Mono) are under the SIL Open Font License; see `static/fonts/`.

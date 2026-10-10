@@ -7,30 +7,26 @@ on:
     branches: [main]
 
 jobs:
-  lint:
+  checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
         with:
-          python-version: "3.12"
-      - run: pip install ruff
-      - run: ruff check src/ main.py web_app.py
-
-  type-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install mypy psutil spotipy python-dotenv fastapi jinja2
-      - run: mypy src/ main.py web_app.py --ignore-missing-imports
+          version: "0.13.0"
+      - name: Install (exactly what uv.lock pins)
+        run: uv sync --frozen --extra web --extra dev --python 3.13
+      - name: Lint
+        run: uv run ruff check src/ main.py web_app.py tests/
+      - name: Type check
+        run: uv run mypy src/ main.py web_app.py --ignore-missing-imports
+      - name: Tests
+        run: uv run pytest -q
 
   docker-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build CLI Docker image
         run: docker build -t playlist-downloader .
       - name: Build Web Docker image

@@ -2,72 +2,288 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Multi-MP3</title>
+<meta name="description" content="Keep Spotify, YouTube and SoundCloud playlists downloaded as clean MP3s.">
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236fdae6' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3'/%3E%3C/svg%3E">
+<link rel="preload" href="/static/fonts/bricolage-grotesque-latin-wght.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header>
-  <h1>🎵 Multi-MP3</h1>
-  <span id="status-indicator" class="status-idle">● Idle</span>
+<!-- One icon set, drawn in one stroke (Lucide geometry, ISC licence). -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <symbol id="i-wave" viewBox="0 0 24 24"><path d="M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-loader" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></symbol>
+  <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+  <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6M12 19h8"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2"/></symbol>
+  <symbol id="i-disc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M10.3 21a2 2 0 0 0 3.4 0M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/></symbol>
+</svg>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand"><svg class="icon" aria-hidden="true"><use href="#i-wave"/></svg>multi-mp3</div>
+    <div id="run-status" class="run-status" data-state="idle"><span class="dot"></span><span id="run-status-label">Idle</span></div>
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab" role="tab" id="tab-links" aria-controls="panel-links" aria-selected="true">Links</button>
+      <button class="tab" role="tab" id="tab-live" aria-controls="panel-live" aria-selected="false" tabindex="-1">Live</button>
+      <button class="tab" role="tab" id="tab-library" aria-controls="panel-library" aria-selected="false" tabindex="-1">Library<span id="failed-count" class="count" hidden></span></button>
+      <button class="tab" role="tab" id="tab-history" aria-controls="panel-history" aria-selected="false" tabindex="-1">History</button>
+      <button class="tab" role="tab" id="tab-system" aria-controls="panel-system" aria-selected="false" tabindex="-1">System</button>
+    </nav>
+  </div>
 </header>
 
-<nav id="tabs">
-  <button class="tab active" data-tab="dashboard">Dashboard</button>
-  <button class="tab" data-tab="live">Live</button>
-  <button class="tab" data-tab="library">Library</button>
-  <button class="tab" data-tab="history">History</button>
-</nav>
+<div id="announcer" class="sr-only" role="status" aria-live="polite"></div>
 
-<!-- ── Dashboard Tab ── -->
-<section id="tab-dashboard" class="tab-content active">
-  <div class="panel">
-    <h2>Links</h2>
-    <textarea id="links-input" rows="10" placeholder="Paste links here (one per line)&#10;Supports Spotify, YouTube, and SoundCloud URLs&#10;Markdown [name](url) also works"></textarea>
-    <div class="controls">
-      <label><input type="checkbox" id="provider-soundcloud" checked> SoundCloud</label>
-      <label><input type="checkbox" id="provider-youtube" checked> YouTube</label>
-      <label><input type="checkbox" id="provider-spotify" checked> Spotify</label>
-      <label title="On: providers and playlists download at the same time. Off: one provider, one playlist and one track at a time — slower, but the way to stay under SoundCloud's per-IP rate limit."><input type="checkbox" id="parallel-toggle" checked> Parallel <span class="muted">(off = one at a time)</span></label>
-      <button id="btn-start" onclick="startJob()">▶ Start Download</button>
+<main id="main">
+
+<!-- ── Links ── -->
+<section id="panel-links" role="tabpanel" aria-labelledby="tab-links">
+  <div class="panel-head">
+    <h1>Links</h1>
+    <p class="lede">The playlists you keep downloaded. Switch one off to skip it without losing it; every run only fetches what's missing.</p>
+  </div>
+
+  <form id="add-link" class="add-link" autocomplete="off">
+    <label for="add-url" class="sr-only">Playlist link</label>
+    <input id="add-url" type="url" placeholder="Paste a Spotify, YouTube or SoundCloud playlist link" required>
+    <label for="add-label" class="sr-only">Label (optional)</label>
+    <input id="add-label" type="text" placeholder="Label (optional)">
+    <button class="btn" type="submit"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Add</button>
+  </form>
+
+  <div id="link-list" class="link-list" role="list" aria-label="Playlists"></div>
+  <p id="links-empty" class="empty" hidden>No links yet. Paste a playlist link above.</p>
+
+  <details id="raw-editor" class="raw-editor">
+    <summary>Edit links.txt as text</summary>
+    <label for="links-input" class="sr-only">links.txt</label>
+    <textarea id="links-input" spellcheck="false"></textarea>
+    <div class="raw-actions">
+      <button id="raw-save" class="btn btn-sm" type="button">Save text</button>
+      <span id="parse-preview" class="parse-preview"></span>
     </div>
-    <div id="parse-preview" class="muted"></div>
+  </details>
+
+  <div id="env-warnings"></div>
+
+  <div class="run-bar">
+    <fieldset id="provider-chips">
+      <legend>From</legend>
+    </fieldset>
+    <fieldset class="segmented" title="Every provider runs at the same time. Balanced and Fast download several tracks at once under a rate limiter that pauses the moment SoundCloud or YouTube push back; Careful does one track at a time.">
+      <legend class="sr-only">Speed</legend>
+      <label><input type="radio" name="speed" value="careful"><span>Careful</span></label>
+      <label><input type="radio" name="speed" value="balanced" checked><span>Balanced</span></label>
+      <label><input type="radio" name="speed" value="fast"><span>Fast</span></label>
+    </fieldset>
+    <button id="btn-start" class="btn btn-primary" type="button"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span id="btn-start-label">Download</span></button>
   </div>
 </section>
 
-<!-- ── Live Tab ── -->
-<section id="tab-live" class="tab-content">
-  <div class="panel">
-    <h2>Download Progress</h2>
-    <div id="provider-accordion"></div>
-    <div class="controls" style="margin-top:1rem">
-      <button id="btn-cancel" onclick="cancelJob()" disabled>⏹ Cancel</button>
+<!-- ── Live ── -->
+<section id="panel-live" role="tabpanel" aria-labelledby="tab-live" hidden>
+  <div class="panel-head">
+    <h1>Live</h1>
+    <div class="actions">
+      <button id="btn-cancel" class="btn btn-ghost-danger" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg>Stop run</button>
     </div>
   </div>
-  <div class="panel log-panel">
-    <h2>Log</h2>
-    <pre id="log-output"></pre>
+  <div id="queue" class="queue" hidden></div>
+  <div id="provider-accordion"><p class="empty">Nothing running. Start a download from Links.</p></div>
+  <details class="run-log">
+    <summary>Run log</summary>
+    <pre id="log-output" tabindex="0"></pre>
+  </details>
+</section>
+
+<!-- ── Library ── -->
+<section id="panel-library" role="tabpanel" aria-labelledby="tab-library" hidden>
+  <div class="panel-head">
+    <h1>Library</h1>
+    <span id="lib-totals" class="muted"></span>
+    <div class="lib-tools">
+      <label for="lib-search" class="sr-only">Search playlists</label>
+      <input id="lib-search" type="search" placeholder="Search playlists">
+      <button id="btn-report" class="btn btn-ghost" type="button" aria-expanded="false" aria-controls="failed-report"><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span id="btn-report-label">Failed tracks</span></button>
+      <button id="btn-reset-all" class="btn btn-ghost-danger" type="button"><svg class="icon" aria-hidden="true"><use href="#i-rotate"/></svg>Reset all</button>
+    </div>
+  </div>
+  <div id="failed-report" class="report" hidden></div>
+  <div id="file-list"><p class="empty">Loading…</p></div>
+</section>
+
+<!-- ── History ── -->
+<section id="panel-history" role="tabpanel" aria-labelledby="tab-history" hidden>
+  <div class="panel-head"><h1>History</h1></div>
+  <div id="history-list"><p class="empty">Loading…</p></div>
+</section>
+
+<!-- ── System ── -->
+<section id="panel-system" role="tabpanel" aria-labelledby="tab-system" hidden>
+  <div class="panel-head"><h1>System</h1></div>
+
+  <div class="sys-block">
+    <h2>Tools</h2>
+    <p>yt-dlp breaks whenever YouTube or SoundCloud change their sites, and fixes usually ship within days — so it can be updated here without waiting for a new version of this app.</p>
+    <dl id="sys-facts" class="facts"><dt>Loading…</dt><dd></dd></dl>
+    <div class="sys-actions" style="margin-top:16px">
+      <button id="btn-check-update" class="btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>Check for updates</button>
+      <button id="btn-update-ytdlp" class="btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Update yt-dlp</button>
+      <span id="update-result" class="result" role="status"></span>
+    </div>
+  </div>
+
+  <div class="sys-block">
+    <h2>Notifications</h2>
+    <p>Get told when a run finishes. In this browser, or on your phone through <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy</a> or a Discord webhook — set <code>NOTIFY_URL</code> in <code>.env</code>.</p>
+    <div class="sys-actions">
+      <button id="btn-notify-permission" class="btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-bell"/></svg><span>Allow browser notifications</span></button>
+      <button id="btn-test-notify" class="btn" type="button">Send a test to NOTIFY_URL</button>
+      <span id="notify-result" class="result" role="status"></span>
+    </div>
+  </div>
+
+  <div class="sys-block">
+    <h2>Housekeeping</h2>
+    <p>Removes leftovers: finished jobs' input files, spotdl error lists older than 30 days, and downloads interrupted part-way. Your music and progress records are never touched.</p>
+    <div class="sys-actions">
+      <button id="btn-cleanup" class="btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg>Clean up leftovers</button>
+      <span id="cleanup-result" class="result" role="status"></span>
+    </div>
   </div>
 </section>
 
-<!-- ── Library Tab ── -->
-<section id="tab-library" class="tab-content">
-  <div class="panel">
-    <h2>Downloaded Playlists</h2>
-    <div id="file-list">Loading...</div>
-  </div>
-</section>
+</main>
 
-<!-- ── History Tab ── -->
-<section id="tab-history" class="tab-content">
-  <div class="panel">
-    <h2>Run History</h2>
-    <div id="history-list">Loading...</div>
-  </div>
-</section>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<dialog id="confirm" aria-labelledby="confirm-title">
+  <form method="dialog">
+    <h2 id="confirm-title"></h2>
+    <p id="confirm-body"></p>
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" value="cancel">Cancel</button>
+      <button class="btn btn-danger" value="ok" id="confirm-ok">OK</button>
+    </div>
+  </form>
+</dialog>
 
 <script>
-// ── Provider icons & ordering ──
+'use strict';
+
+// ── Small helpers ───────────────────────────────────────────────────────
+
+const $ = id => document.getElementById(id);
+const SVGNS = 'http://www.w3.org/2000/svg';
+
+// Explicit element construction — no HTML parsing, direct node references,
+// and nothing user- or file-derived ever goes through innerHTML.
+function mk(tag, className, text) {
+  const el = document.createElement(tag);
+  if (className) el.className = className;
+  if (text !== undefined && text !== null) el.textContent = text;
+  return el;
+}
+function icon(name, cls) {
+  const svg = document.createElementNS(SVGNS, 'svg');
+  svg.setAttribute('class', 'icon' + (cls ? ' ' + cls : ''));
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS(SVGNS, 'use');
+  use.setAttribute('href', '#i-' + name);
+  svg.appendChild(use);
+  return svg;
+}
+function setIcon(svg, name) {
+  const use = svg && svg.firstChild;
+  const href = '#i-' + name;
+  if (use && use.getAttribute('href') !== href) use.setAttribute('href', href);
+}
+function setText(el, v) { if (el && el.textContent !== v) el.textContent = v; }
+function setAttr(el, k, v) { if (el && el.getAttribute(k) !== v) el.setAttribute(k, v); }
+function setWidth(el, pct) { const w = pct + '%'; if (el && el.style.width !== w) el.style.width = w; }
+
+async function api(path, opts = {}) {
+  const init = { method: opts.method || 'GET', headers: {} };
+  if (opts.body !== undefined) {
+    init.headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(opts.body);
+  }
+  const r = await fetch(path, init);
+  let data = null;
+  try { data = await r.json(); } catch (_) { /* empty body */ }
+  if (!r.ok) {
+    const err = new Error((data && data.detail) || `Request failed (${r.status})`);
+    err.status = r.status;
+    throw err;
+  }
+  return data;
+}
+
+function toast(message, kind) {
+  const el = mk('div', 'toast' + (kind ? ' ' + kind : ''), message);
+  $('toasts').appendChild(el);
+  setTimeout(() => el.remove(), kind === 'bad' ? 8000 : 5000);
+}
+function announce(message) { setText($('announcer'), message); }
+
+function confirmDialog({ title, body, ok = 'OK' }) {
+  const dlg = $('confirm');
+  setText($('confirm-title'), title);
+  setText($('confirm-body'), body);
+  setText($('confirm-ok'), ok);
+  return new Promise(resolve => {
+    dlg.addEventListener('close', () => resolve(dlg.returnValue === 'ok'), { once: true });
+    dlg.showModal();
+  });
+}
+
+function fmtBytes(n) {
+  if (!n) return '0 MB';
+  const gb = n / 1024 ** 3;
+  return gb >= 1 ? gb.toFixed(1) + ' GB' : Math.round(n / 1024 ** 2) + ' MB';
+}
+function fmtDuration(sec) {
+  if (sec == null || sec < 0) return '—';
+  if (sec < 60) return Math.round(sec) + 's';
+  const m = Math.floor(sec / 60), s = Math.round(sec % 60);
+  return m < 60 ? `${m}m ${String(s).padStart(2, '0')}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+function fmtClock(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+function plural(n, word) { return `${n} ${word}${n === 1 ? '' : 's'}`; }
+function shortUrl(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\.|^open\.|^m\./, '');
+    // watch?v=…&list=… — the list id is what names the playlist.
+    const list = u.searchParams.get('list');
+    if (host.includes('youtube') && list) return `${host}/playlist?list=${list}`;
+    return (host + u.pathname).replace(/\/$/, '');
+  } catch (_) { return url; }
+}
+
+// ── Provider marks ──────────────────────────────────────────────────────
 // Real brand marks (simple-icons paths), not lookalike emoji: a TV for
 // YouTube and a speaker for SoundCloud read as "some media thing" rather
 // than naming the service a playlist actually came from.
@@ -87,241 +303,443 @@ const PROVIDER_BRANDS = {
 };
 const PROVIDER_ORDER = ['youtube', 'soundcloud', 'spotify'];
 
-// Provider keys are internal constants, never user input, so building the
-// markup as a string is safe here.
-function providerIconHTML(p, size) {
+function brandMark(p, size) {
   const b = PROVIDER_BRANDS[p];
-  if (!b) return '📦';
-  const s = size || 18;
-  return `<svg class="brand-svg" viewBox="0 0 24 24" width="${s}" height="${s}" `
-       + `fill="${b.color}" role="img" aria-label="${b.label}"><path d="${b.path}"/></svg>`;
+  const svg = document.createElementNS(SVGNS, 'svg');
+  const s = String(size || 16);
+  svg.setAttribute('class', 'brand-svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', s);
+  svg.setAttribute('height', s);
+  if (!b) return svg;
+  svg.setAttribute('fill', b.color);
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', b.label);
+  const path = document.createElementNS(SVGNS, 'path');
+  path.setAttribute('d', b.path);
+  svg.appendChild(path);
+  return svg;
 }
 
-function providerIconEl(p, className) {
-  const el = mk('span', className);
-  el.innerHTML = providerIconHTML(p);
-  el.title = (PROVIDER_BRANDS[p] || {}).label || p;
-  return el;
-}
+// ── Tabs ────────────────────────────────────────────────────────────────
 
-// ── Live state ──
-let liveState = { providers: {}, currentJobId: null };
+const TABS = ['links', 'live', 'library', 'history', 'system'];
+// The tab named in the address bar when the page loaded. Without one, a
+// refresh during a run lands on Live.
+const START_TAB = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : '';
+const loaders = { library: () => loadLibrary(), history: () => loadHistory(), system: () => loadSystem() };
 
-function ensureProvider(p) {
-  if (!liveState.providers[p]) {
-    liveState.providers[p] = { expanded: true, links: {} };
+function selectTab(name, focus) {
+  if (!TABS.includes(name)) name = 'links';
+  for (const t of TABS) {
+    const on = t === name;
+    const tab = $('tab-' + t);
+    setAttr(tab, 'aria-selected', String(on));
+    tab.tabIndex = on ? 0 : -1;
+    $('panel-' + t).hidden = !on;
+    if (on && focus) tab.focus();
   }
-  return liveState.providers[p];
+  // The open tab survives a refresh — handy mid-run.
+  if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+  if (loaders[name]) loaders[name]();
 }
-
-// ── Tab Switching ──
-document.querySelectorAll('.tab').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
-    if (btn.dataset.tab === 'library') loadFiles();
-    if (btn.dataset.tab === 'history') loadHistory();
-  });
+for (const t of TABS) $('tab-' + t).addEventListener('click', () => selectTab(t));
+window.addEventListener('hashchange', () => selectTab(location.hash.slice(1)));
+document.querySelector('.tabs').addEventListener('keydown', e => {
+  const i = TABS.findIndex(t => $('tab-' + t).getAttribute('aria-selected') === 'true');
+  const next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: TABS.length - 1 }[e.key];
+  if (next === undefined) return;
+  e.preventDefault();
+  selectTab(TABS[(next + TABS.length) % TABS.length], true);
 });
 
-// ── Load links ──
-async function loadLinks() {
-  const r = await fetch('/api/links');
-  const d = await r.json();
-  document.getElementById('links-input').value = d.text;
-  lastParsed = d.parsed;
-  renderParsePreview();
+// ── Run status, queue, setup warnings ───────────────────────────────────
+
+const STATUS_LABEL = {
+  idle: 'Idle', running: 'Downloading', stopping: 'Stopping…', queued: 'Queued',
+  completed: 'All done', partial: 'Finished — tracks left', failed: 'Run failed', cancelled: 'Stopped',
+};
+let runState = 'idle';
+function setRunStatus(state) {
+  runState = state;
+  const el = $('run-status');
+  setAttr(el, 'data-state', state);
+  setText($('run-status-label'), STATUS_LABEL[state] || state);
+  const busy = state === 'running' || state === 'stopping';
+  $('btn-cancel').disabled = state !== 'running';
+  $('btn-reset-all').disabled = busy;
+  renderStartButton();
 }
 
-// ── Parse preview ──
-// Counts come from the server, which runs the same parser a real job does, so
-// the preview can't quietly disagree with what would actually download. The
-// provider filter is applied here instead, so ticking a box repaints instantly
-// with no round-trip.
+let lastStatus = null;
+let attachedJobId = null;
+let firstPoll = true;
+
+async function pollStatus() {
+  let s;
+  try { s = await api('/api/status'); } catch (_) { return; }
+  lastStatus = s;
+  renderEnvWarnings(s);
+  renderQueue(s.queue || []);
+  if (s.running) {
+    setRunStatus(s.current_status === 'cancelling' ? 'stopping' : 'running');
+    if (s.current_job_id !== attachedJobId) {
+      // A refreshed page, or the next queued job starting: replay its events.
+      attachToJob(s.current_job_id, { switchTab: firstPoll && !START_TAB });
+    }
+  } else if (runState === 'running' || runState === 'stopping') {
+    // Finished while the stream was down; the History tab has the outcome.
+    setRunStatus('idle');
+  }
+  firstPoll = false;
+}
+
+let envKey = '';
+function renderEnvWarnings(s) {
+  const warnings = [];
+  if (!s.spotdl) warnings.push('spotdl isn’t installed, so Spotify links will fail. It lives in its own environment: run setup again, or set SPOTDL_BIN.');
+  if (!s.deno) warnings.push('deno wasn’t found, so YouTube downloads will fail with HTTP 403. Install it with “pip install deno”.');
+  const key = warnings.join('|');
+  if (key === envKey) return;
+  envKey = key;
+  const root = $('env-warnings');
+  root.textContent = '';
+  for (const w of warnings) {
+    const n = mk('p', 'notice');
+    n.appendChild(icon('alert'));
+    n.appendChild(mk('span', '', w));
+    root.appendChild(n);
+  }
+}
+
+let queueKey = '';
+function renderQueue(queue) {
+  const key = queue.map(q => q.job_id).join(',');
+  if (key === queueKey) return;
+  queueKey = key;
+  const root = $('queue');
+  root.textContent = '';
+  root.hidden = !queue.length;
+  if (!queue.length) return;
+  root.appendChild(mk('h2', '', 'Up next'));
+  queue.forEach((q, i) => {
+    const row = mk('div', 'queue-item');
+    row.appendChild(mk('span', 'num', String(i + 1)));
+    const providers = q.providers.map(p => (PROVIDER_BRANDS[p] || {}).label || p).join(', ');
+    row.appendChild(mk('span', '', `${plural(q.links, 'playlist')} · ${providers} · ${q.speed}`));
+    const rm = mk('button', 'icon-btn');
+    rm.type = 'button';
+    rm.setAttribute('aria-label', `Remove queued run ${i + 1}`);
+    rm.appendChild(icon('x'));
+    rm.addEventListener('click', async () => {
+      try { await api('/api/jobs/' + q.job_id, { method: 'DELETE' }); } catch (e) { toast(e.message, 'bad'); }
+      pollStatus();
+    });
+    row.appendChild(rm);
+    root.appendChild(row);
+  });
+}
+
+// ── Links ───────────────────────────────────────────────────────────────
+
+let linkEntries = [];
 let lastParsed = { total: 0, spotify: 0, soundcloud: 0, youtube: 0 };
+
+function applyLinksData(d) {
+  linkEntries = d.entries || [];
+  if (!rawDirty) $('links-input').value = d.text || '';
+  lastParsed = d.parsed || lastParsed;
+  renderParsePreview();
+  renderChips();
+  renderStartButton();
+}
+
+async function loadLinks() {
+  try { applyLinksData(await api('/api/links')); } catch (e) { toast(e.message, 'bad'); }
+  renderLinks();
+}
+
+async function saveEntries({ rerender } = {}) {
+  try {
+    const d = await api('/api/links', { method: 'PUT', body: {
+      entries: linkEntries.map(e => ({ line: e.line, url: e.url, label: e.label, enabled: e.enabled, markdown: e.markdown })),
+    } });
+    applyLinksData(d);
+    if (rerender) renderLinks();
+  } catch (e) { toast('Couldn’t save links: ' + e.message, 'bad'); }
+}
+
+function syncBadge(rec) {
+  if (!rec || !rec.total) return ['new', 'New'];
+  if (!rec.left) return ['ok', `Up to date · ${rec.done}`];
+  return ['left', `${rec.left} left of ${rec.total}`];
+}
+
+function renderLinks() {
+  const root = $('link-list');
+  root.textContent = '';
+  $('links-empty').hidden = linkEntries.length > 0;
+  linkEntries.forEach((e, i) => {
+    const row = mk('div', 'link-row' + (e.enabled ? '' : ' off'));
+    row.setAttribute('role', 'listitem');
+    const name = e.label || (e.record && e.record.name) || shortUrl(e.url);
+
+    const sw = mk('label', 'switch');
+    const cb = mk('input');
+    cb.type = 'checkbox';
+    cb.name = 'enabled-' + i;
+    cb.checked = e.enabled;
+    cb.setAttribute('aria-label', `Include “${name}” in downloads`);
+    cb.addEventListener('change', () => {
+      e.enabled = cb.checked;
+      row.classList.toggle('off', !cb.checked);
+      saveEntries();
+    });
+    sw.appendChild(cb);
+    sw.appendChild(mk('span'));
+    row.appendChild(sw);
+    row.appendChild(brandMark(e.provider, 18));
+
+    const main = mk('div', 'link-main');
+    const label = mk('input', 'link-label');
+    label.type = 'text';
+    label.name = 'label-' + i;
+    label.value = e.label;
+    label.placeholder = (e.record && e.record.name) || 'Add a label';
+    label.setAttribute('aria-label', 'Label for ' + shortUrl(e.url));
+    label.addEventListener('change', () => { e.label = label.value.trim(); saveEntries(); });
+    label.addEventListener('keydown', ev => { if (ev.key === 'Enter') label.blur(); });
+    main.appendChild(label);
+    const a = mk('a', 'link-url', shortUrl(e.url));
+    a.href = e.url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    main.appendChild(a);
+    row.appendChild(main);
+
+    const [cls, text] = syncBadge(e.record);
+    const badge = mk('span', 'sync ' + cls, text);
+    if (e.record && (e.record.failed || e.record.unavailable)) {
+      badge.title = `${e.record.failed} failed · ${e.record.unavailable} unavailable`;
+    }
+    row.appendChild(badge);
+
+    const rm = mk('button', 'icon-btn');
+    rm.type = 'button';
+    rm.setAttribute('aria-label', `Remove “${name}”`);
+    rm.appendChild(icon('trash'));
+    rm.addEventListener('click', () => {
+      linkEntries.splice(i, 1);
+      saveEntries({ rerender: true });
+      toast(`Removed “${name}”. Its downloaded files are untouched.`);
+    });
+    row.appendChild(rm);
+    root.appendChild(row);
+  });
+}
+
+$('add-link').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const urls = $('add-url').value.split(/\s+/).filter(Boolean);
+  const label = $('add-label').value.trim();
+  for (const url of urls) linkEntries.push({ url, label: urls.length === 1 ? label : '', enabled: true, markdown: false });
+  await saveEntries({ rerender: true });
+  const before = urls.length;
+  const known = linkEntries.filter(e => urls.includes(e.url)).length;
+  if (known < before) toast('That doesn’t look like a Spotify, YouTube or SoundCloud link.', 'bad');
+  $('add-url').value = '';
+  $('add-label').value = '';
+});
+
+// Raw text editing — the same file, for bulk changes.
+let rawDirty = false;
 let parseTimer = null;
 let parseSeq = 0;
-
-function renderParsePreview() {
-  const el = document.getElementById('parse-preview');
-  const on = PROVIDER_ORDER.filter(p => document.getElementById('provider-' + p).checked);
-  const total = lastParsed.total || 0;
-  const selected = on.reduce((s, p) => s + (lastParsed[p] || 0), 0);
-  const skipped = total - selected;
-
-  if (!total) {
-    el.textContent = document.getElementById('links-input').value.trim()
-      ? 'No Spotify, SoundCloud or YouTube links found.'
-      : 'Paste some links above to see what will be downloaded.';
-    return;
-  }
-
-  const counts = PROVIDER_ORDER.map(p => {
-    const off = !on.includes(p);
-    const label = PROVIDER_BRANDS[p].label;
-    return `<span class="pp-count${off ? ' pp-off' : ''}" title="${label}`
-         + `${off ? ' — unticked, these will be skipped' : ''}">`
-         + `${providerIconHTML(p, 13)} ${lastParsed[p] || 0}</span>`;
-  }).join(' ');
-
-  el.innerHTML = `Parsed: <strong>${selected}</strong> link${selected === 1 ? '' : 's'} `
-    + `(${counts})` + (skipped ? ` · ${skipped} skipped` : '');
-}
-
-// Re-counts what is in the box right now, saved or not.
-async function refreshParsePreview() {
-  const text = document.getElementById('links-input').value;
-  const seq = ++parseSeq;
-  try {
-    const r = await fetch('/api/links/parse', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text}),
-    });
-    if (!r.ok) return;
-    const d = await r.json();
-    // A later keystroke already answered — its counts are the current ones.
-    if (seq !== parseSeq) return;
-    lastParsed = d.parsed;
-  } catch (_) {
-    return;   // offline or mid-restart: keep showing the last good counts
-  }
-  renderParsePreview();
-}
-
-// Typing fires per character, so the request is debounced; the checkbox
-// handlers only re-render, since unticking a provider can't change the counts.
-document.getElementById('links-input').addEventListener('input', () => {
+$('links-input').addEventListener('input', () => {
+  rawDirty = true;
   clearTimeout(parseTimer);
   parseTimer = setTimeout(refreshParsePreview, 250);
 });
-PROVIDER_ORDER.forEach(p => {
-  document.getElementById('provider-' + p)
-    .addEventListener('change', renderParsePreview);
+$('raw-save').addEventListener('click', saveRaw);
+async function saveRaw() {
+  try {
+    rawDirty = false;
+    applyLinksData(await api('/api/links', { method: 'PUT', body: { text: $('links-input').value } }));
+    renderLinks();
+    toast('Saved links.txt');
+  } catch (e) { rawDirty = true; toast('Couldn’t save: ' + e.message, 'bad'); }
+}
+async function refreshParsePreview() {
+  const seq = ++parseSeq;
+  try {
+    const d = await api('/api/links/parse', { method: 'POST', body: { text: $('links-input').value } });
+    if (seq !== parseSeq) return;     // a later keystroke already answered
+    lastParsed = d.parsed;
+    renderParsePreview();
+  } catch (_) { /* keep the last good counts */ }
+}
+function renderParsePreview() {
+  const el = $('parse-preview');
+  el.textContent = '';
+  if (!lastParsed.total) { el.appendChild(mk('span', '', 'No Spotify, SoundCloud or YouTube links in the text.')); return; }
+  el.appendChild(mk('span', '', 'Recognised '));
+  el.appendChild(mk('strong', '', plural(lastParsed.total, 'link')));
+  for (const p of PROVIDER_ORDER) {
+    const c = mk('span', 'pp-count');
+    c.appendChild(brandMark(p, 13));
+    c.appendChild(mk('span', 'num', String(lastParsed[p] || 0)));
+    el.appendChild(c);
+  }
+}
+
+// Provider chips + speed + the start button.
+function selectedProviders() {
+  return PROVIDER_ORDER.filter(p => { const cb = $('provider-' + p); return !cb || cb.checked; });
+}
+function renderChips() {
+  const root = $('provider-chips');
+  for (const p of PROVIDER_ORDER) {
+    const n = linkEntries.filter(e => e.enabled && e.provider === p).length;
+    let chip = $('chip-' + p);
+    if (!chip) {
+      chip = mk('label', 'chip');
+      chip.id = 'chip-' + p;
+      const cb = mk('input');
+      cb.type = 'checkbox';
+      cb.id = 'provider-' + p;
+      cb.name = 'provider';
+      cb.value = p;
+      cb.checked = true;
+      cb.addEventListener('change', () => { renderParsePreview(); renderStartButton(); });
+      chip.appendChild(cb);
+      chip.appendChild(brandMark(p, 15));
+      chip.appendChild(mk('span', '', PROVIDER_BRANDS[p].label));
+      chip.appendChild(mk('span', 'num'));
+      root.appendChild(chip);
+    }
+    setText(chip.lastChild, String(n));
+  }
+}
+function renderStartButton() {
+  const providers = selectedProviders();
+  const n = linkEntries.filter(e => e.enabled && providers.includes(e.provider)).length;
+  const busy = runState === 'running' || runState === 'stopping';
+  setText($('btn-start-label'), busy ? `Queue ${plural(n, 'playlist')}` : `Download ${plural(n, 'playlist')}`);
+  $('btn-start').disabled = n === 0;
+}
+function selectedSpeed() {
+  const r = document.querySelector('input[name="speed"]:checked');
+  return r ? r.value : 'balanced';
+}
+document.querySelectorAll('input[name="speed"]').forEach(r => r.addEventListener('change', () => {
+  try { localStorage.setItem('mm3-speed', selectedSpeed()); } catch (_) { /* private mode */ }
+}));
+try {
+  const saved = localStorage.getItem('mm3-speed');
+  const r = saved && document.querySelector(`input[name="speed"][value="${saved}"]`);
+  if (r) r.checked = true;
+} catch (_) { /* private mode */ }
+
+$('btn-start').addEventListener('click', async () => {
+  if (rawDirty) await saveRaw();
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission().catch(() => {});
+  }
+  launchJob('', selectedProviders());
 });
 
-// ── Start job ──
-async function startJob() {
-  const links = document.getElementById('links-input').value;
-  const providers = [];
-  if (document.getElementById('provider-soundcloud').checked) providers.push('soundcloud');
-  if (document.getElementById('provider-youtube').checked) providers.push('youtube');
-  if (document.getElementById('provider-spotify').checked) providers.push('spotify');
-  const parallel = document.getElementById('parallel-toggle').checked;
+// Shared by Links' start button and the Library's Resume / Retry buttons.
+async function launchJob(links, providers) {
+  let r;
+  try {
+    r = await api('/api/jobs', { method: 'POST', body: { links, providers, speed: selectedSpeed() } });
+  } catch (e) { toast(e.message, 'bad'); return; }
+  if (r.status === 'queued') {
+    toast(`Queued — starts after the current run (#${r.position} in line).`);
+    pollStatus();
+    return;
+  }
+  attachToJob(r.job_id, { switchTab: true, links: r.links });
+}
 
-  // Save links first
-  await fetch('/api/links', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({text: links}) });
+// ── Live: state ─────────────────────────────────────────────────────────
 
-  const r = await fetch('/api/jobs', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({links, providers, parallel})
-  });
-  if (!r.ok) { alert((await r.json()).detail); return; }
+let liveState = { providers: {}, currentJobId: null };
+let es = null;
 
-  const {job_id, links: linksByProvider} = await r.json();
-
-  // Tear down the previous run's DOM + caches before building the new one
-  resetLiveDOM();
-
-  // Pre-populate all cards from the link list
-  liveState = { providers: {}, currentJobId: job_id };
-  for (const [provider, providerLinks] of Object.entries(linksByProvider)) {
-    if (!providerLinks || !providerLinks.length) continue;
+function ensureProvider(p) {
+  if (!liveState.providers[p]) liveState.providers[p] = { expanded: true, links: {} };
+  return liveState.providers[p];
+}
+function newLink(link, name, status) {
+  return { name: name || shortUrl(link), status, tracks_done: 0, tracks_total: 0, current_title: '', code: null };
+}
+function prepopulate(linksByProvider) {
+  for (const [provider, links] of Object.entries(linksByProvider || {})) {
+    if (!links || !links.length) continue;
     const p = ensureProvider(provider);
-    p.expanded = true;
-    for (const link of providerLinks) {
-      const shortName = link.split('?')[0].split('/').pop() || link;
-      p.links[link] = {
-        name: shortName,
-        image: null,
-        status: 'pending',
-        tracks_done: 0,
-        tracks_total: 0,
-        current_title: 'Waiting...',
-        code: null,
-      };
-    }
-  }
-  document.getElementById('btn-start').disabled = true;
-  document.getElementById('btn-cancel').disabled = false;
-  document.getElementById('status-indicator').textContent = '● Running';
-  document.getElementById('status-indicator').className = 'status-running';
-
-  renderAccordion();
-
-  // Switch to Live tab
-  document.querySelector('.tab[data-tab="live"]').click();
-  streamEvents(job_id);
-}
-
-// ── Cancel job ──
-async function cancelJob() {
-  const r = await fetch('/api/status');
-  const s = await r.json();
-  if (s.current_job_id) {
-    await fetch('/api/jobs/' + s.current_job_id, {method:'DELETE'});
+    for (const link of links) if (!p.links[link]) p.links[link] = newLink(link, '', 'pending');
   }
 }
 
-// ── Bounded global log ring buffer ──
-// textContent += was O(n^2) and unbounded — it froze the tab after a few
-// thousand lines. Keep a capped array and flush on a timer instead.
+// Attach the Live tab to a job and replay its events from the start, so a
+// refreshed page (or a second tab) rebuilds the run exactly. EventSource
+// resumes from Last-Event-ID by itself if the connection drops.
+function attachToJob(jobId, { switchTab = false, links = null } = {}) {
+  if (es) es.close();
+  attachedJobId = jobId;
+  resetLiveDOM();
+  liveState = { providers: {}, currentJobId: jobId };
+  if (links) prepopulate(links);
+  globalLog = [];
+  setText($('log-output'), '');
+  setRunStatus('running');
+  syncAccordion();
+  if (switchTab) selectTab('live');
+  es = new EventSource('/api/jobs/' + jobId + '/events');
+  es.addEventListener('message', e => {
+    let d;
+    try { d = JSON.parse(e.data); } catch (_) { return; }
+    handleLiveEvent(d);
+  });
+}
+
+// Bounded log buffers: textContent += was O(n²) and froze the tab.
 const GLOBAL_LOG_MAX = 400;
 const PLAYLIST_LOG_MAX = 150;
 let globalLog = [];
-let _logFlushTimer = null;
-
+let logFlushTimer = null;
 function pushGlobalLog(line) {
   globalLog.push(line);
-  if (globalLog.length > GLOBAL_LOG_MAX) {
-    globalLog.splice(0, globalLog.length - GLOBAL_LOG_MAX);
-  }
-  if (!_logFlushTimer) {
-    _logFlushTimer = setTimeout(flushGlobalLog, 300);
-  }
+  if (globalLog.length > GLOBAL_LOG_MAX) globalLog.splice(0, globalLog.length - GLOBAL_LOG_MAX);
+  if (!logFlushTimer) logFlushTimer = setTimeout(flushGlobalLog, 300);
 }
-
 function flushGlobalLog() {
-  _logFlushTimer = null;
-  const logEl = document.getElementById('log-output');
-  if (!logEl) return;
-  const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
-  logEl.textContent = globalLog.join('\n');
-  if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+  logFlushTimer = null;
+  const el = $('log-output');
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  el.textContent = globalLog.join('\n');
+  if (atBottom) el.scrollTop = el.scrollHeight;
 }
-
 function pushPlaylistLog(provider, linkId, line) {
-  const p = liveState.providers[provider];
-  if (!p || !p.links[linkId]) return;
-  const info = p.links[linkId];
+  const info = (liveState.providers[provider] || {}).links?.[linkId];
+  if (!info) return;
   if (!info.logs) info.logs = [];
   info.logs.push(line);
-  if (info.logs.length > PLAYLIST_LOG_MAX) {
-    info.logs.splice(0, info.logs.length - PLAYLIST_LOG_MAX);
+  if (info.logs.length > PLAYLIST_LOG_MAX) info.logs.splice(0, info.logs.length - PLAYLIST_LOG_MAX);
+  if (info.logsOpen) {
+    const card = domCache.providers[provider]?.cards[linkId];
+    if (!card) return;
+    const pane = card.logPane;
+    const atBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 30;
+    pane.appendChild(document.createTextNode(line + '\n'));
+    while (pane.childNodes.length > PLAYLIST_LOG_MAX) pane.removeChild(pane.firstChild);
+    if (atBottom) pane.scrollTop = pane.scrollHeight;
   }
-  // Only touch the DOM if this card's log pane is actually open
-  if (info.logsOpen) appendPlaylistLogDOM(provider, linkId, line);
 }
 
-function appendPlaylistLogDOM(provider, linkId, line) {
-  // Uses the persistent DOM cache — no querySelector scan per log line.
-  const pEntry = domCache.providers[provider];
-  const card = pEntry && pEntry.cards[linkId];
-  if (!card) return;
-  const pane = card.logPane;
-  const atBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 30;
-  pane.appendChild(document.createTextNode(line + '\n'));
-  while (pane.childNodes.length > PLAYLIST_LOG_MAX) pane.removeChild(pane.firstChild);
-  if (atBottom) pane.scrollTop = pane.scrollHeight;
-}
-
-// ── Track title helpers ────────────────────────────────────────────────
-// Providers report full output paths ("My Playlist/08 Artist - Song.mp3").
-// Strip the directory and container extension so rows stay readable and so
-// the .webm and .mp3 lines for one track don't look like two tracks.
+// Providers report full output paths ("My Playlist/08 Artist - Song.mp3");
+// strip the folder and extension so rows stay readable.
 function cleanTrackTitle(s) {
   if (!s) return '';
   let t = String(s).trim().replace(/\\/g, '/');
@@ -329,45 +747,34 @@ function cleanTrackTitle(s) {
   if (slash >= 0) t = t.slice(slash + 1);
   return t.replace(/\.(mp3|m4a|webm|opus|ogg|wav|flac|mp4|mkv|part)$/i, '');
 }
+function isPlaceholder(title) { return !title || /^Track \d+$/.test(title); }
 
-function isPlaceholder(title) {
-  return !title || /^Track \d+$/.test(title);
-}
+// ── O(1) track bookkeeping ──
+// Every per-event operation is constant time; Array.find()/filter() per event
+// made a full playlist O(tracks²) — 3.5s for a 5.7k-track batch.
+function normKey(s) { return String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim(); }
 
-// ── O(1) track state bookkeeping ───────────────────────────────────────
-// Every per-event operation below is constant time. The earlier version used
-// Array.find()/filter() per event, which made a full playlist O(tracks^2).
-
-function normKey(s) {
-  return String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
-// Providers name a track differently than the metadata does: Spotify gives
-// {title:"Let Me Go", artists:["Skepsis"]} while spotdl prints
-// "Skepsis - Let Me Go". Index several aliases so either form resolves.
+// spotdl prints "Artist - Title" where the metadata has {title, artists};
+// index several aliases so either form resolves.
 function addTrackKeys(info, t, idx) {
   const title = t.title || '';
   if (!title) return;
   const artists = t.artists || [];
   const keys = [title];
   if (artists.length) {
-    keys.push(artists[0] + ' - ' + title);
-    keys.push(artists.join(', ') + ' - ' + title);
-    keys.push(title + ' - ' + artists[0]);
+    keys.push(artists[0] + ' - ' + title, artists.join(', ') + ' - ' + title, title + ' - ' + artists[0]);
   }
   for (const k of keys) {
     const nk = normKey(k);
     if (nk && !info._titleIndex.has(nk)) info._titleIndex.set(nk, idx);
   }
 }
-
 function lookupTrack(info, query) {
   if (!info._titleIndex) return undefined;
   const nk = normKey(query);
   if (!nk) return undefined;
   let idx = info._titleIndex.get(nk);
   if (idx !== undefined) return idx;
-  // Fall back to the portion after an "Artist - " prefix
   const dash = nk.indexOf(' - ');
   if (dash > 0) {
     idx = info._titleIndex.get(nk.slice(dash + 3));
@@ -376,51 +783,33 @@ function lookupTrack(info, query) {
   }
   return idx;
 }
-
 function initTrackIndex(info) {
   info._titleIndex = new Map();
   info._idIndex = new Map();
   info._dirty = new Set();
   info._doneCount = 0;
   info._pendingCursor = 0;
-  for (let i = 0; i < info.tracks.length; i++) {
-    const t = info.tracks[i];
+  info.tracks.forEach((t, i) => {
     addTrackKeys(info, t, i);
     if (t.id) info._idIndex.set(t.id, i);
     if (t.status === 'downloaded') info._doneCount++;
-  }
+  });
   info.tracks_done = info._doneCount;
 }
-
-// Grow the placeholder track list to `n` rows, keeping the indexes in step.
-// A resume learns its length in pieces: archive skips arrive one at a time
-// carrying only their position, and the real total only lands with the first
-// track that actually downloads. Building rows on demand means those skipped
-// tracks have somewhere to be ticked off, whichever order the news arrives in.
+// Grow the placeholder list to n rows (a playlist can learn its length in
+// pieces — progress events arriving before any track list).
 function ensureTracks(info, n) {
   if (!n || n < 0) return;
   if (!info.tracks) info.tracks = [];
   const before = info.tracks.length;
   if (n > before) {
-    for (let i = before; i < n; i++) {
-      info.tracks.push({
-        num: i + 1, title: `Track ${i + 1}`, artists: [], status: 'pending',
-      });
-    }
-    if (!info._titleIndex) {
-      initTrackIndex(info);
-    } else {
-      for (let i = before; i < n; i++) addTrackKeys(info, info.tracks[i], i);
-    }
-    // Signature change → the list is rebuilt with the new rows on next render
+    for (let i = before; i < n; i++) info.tracks.push({ num: i + 1, title: `Track ${i + 1}`, artists: [], status: 'pending' });
+    if (!info._titleIndex) initTrackIndex(info);
+    else for (let i = before; i < n; i++) addTrackKeys(info, info.tracks[i], i);
     info._trackSigSalt = (info._trackSigSalt || 0) + 1;
   }
-  if ((info.tracks_total || 0) < info.tracks.length) {
-    info.tracks_total = info.tracks.length;
-  }
+  if ((info.tracks_total || 0) < info.tracks.length) info.tracks_total = info.tracks.length;
 }
-
-// Advance a cursor instead of re-scanning for the first unfinished track.
 function nextPending(info) {
   const tracks = info.tracks;
   let i = info._pendingCursor || 0;
@@ -428,7 +817,6 @@ function nextPending(info) {
   info._pendingCursor = i;
   return i < tracks.length ? tracks[i] : null;
 }
-
 function setTrackStatus(info, track, status) {
   if (!track || track.status === status) return;
   if (track.status === 'downloaded' && status !== 'downloaded') info._doneCount--;
@@ -437,488 +825,355 @@ function setTrackStatus(info, track, status) {
   info.tracks_done = info._doneCount;
   if (info._dirty) info._dirty.add(track.num);
 }
-
-// Called once a link finishes. Without this, a track that errored keeps its
-// 🔄 spinner forever, because spotdl only prints a completion line for the
-// tracks that actually succeeded.
-function finalizeTrackStates(provider, linkId, info) {
-  if (!info || !info.tracks || !info.tracks.length) return;
-  for (const t of info.tracks) {
-    if (t.status === 'downloading' || t.status === 'retrying') {
-      if (!t.error) t.error = 'Download failed';
-      setTrackStatus(info, t, 'failed');
-    } else if (t.status === 'pending') {
-      // Never attempted — usually a local file in the playlist, which has no
-      // Spotify id and therefore nothing to download.
-      setTrackStatus(info, t, (t.local || !t.id) ? 'unavailable' : 'failed');
-    }
-  }
-  updateTrackStatusDOM(provider, linkId, info);
-}
-
 function setTrackTitle(info, track, title) {
   if (!track || !title || track.title === title) return;
   track.title = title;
   if (info._titleIndex) addTrackKeys(info, track, track.num - 1);
   if (info._dirty) info._dirty.add(track.num);
 }
-
-// ── SSE event stream with per-provider/playlist cards ──
-function streamEvents(jobId) {
-  const logEl = document.getElementById('log-output');
-  logEl.textContent = '';
-  globalLog = [];
-
-  const es = new EventSource('/api/jobs/' + jobId + '/events');
-  es.addEventListener('message', e => {
-    let d;
-    try { d = JSON.parse(e.data); } catch (_) { return; }
-    handleLiveEvent(d, es);
-  });
-
-  es.addEventListener('error', () => {
-    // EventSource will auto-reconnect
-  });
+// A run that stopped early leaves unfinished tracks recorded as still to do,
+// so those return to pending rather than failed.
+function finalizeTrackStates(provider, linkId, info) {
+  if (!info || !info.tracks || !info.tracks.length) return;
+  const stoppedEarly = info.status === 'cancelled' || info.status === 'partial';
+  for (const t of info.tracks) {
+    if (t.status === 'downloading' || t.status === 'retrying') {
+      if (stoppedEarly) setTrackStatus(info, t, 'pending');
+      else { if (!t.error) t.error = 'Download failed'; setTrackStatus(info, t, 'failed'); }
+    }
+  }
+  updateTrackStatusDOM(provider, linkId, info);
+}
+// Playlist outcome codes from the server (src/models.py).
+function linkStatusFromCode(code) {
+  return code === 0 ? 'complete' : code === 2 ? 'partial' : code === 3 ? 'cancelled' : 'failed';
 }
 
-// Applies one SSE event to live state + DOM. Kept separate from the transport
-// so it can be driven directly (tests, replay) without a live EventSource.
-function handleLiveEvent(d, es) {
-  {
-    if (d.type === 'ping') return;
+function handleLiveEvent(d) {
+  const t = d.type;
+  if (t === 'log') { pushGlobalLog(d.message); return; }
 
-    if (d.type === 'log') {
-      pushGlobalLog(d.message);
-      return;
+  if (t === 'job.started') { prepopulate(d.links); scheduleRender(); return; }
+
+  if (t === 'link.started') {
+    const p = ensureProvider(d.provider);
+    // "queued": resolved, waiting for a worker — learn the name and size
+    // without claiming to be downloading yet.
+    const status = d.queued ? 'pending' : 'running';
+    const info = p.links[d.link] || (p.links[d.link] = newLink(d.link, d.name, status));
+    info.status = status;
+    if (d.name) info.name = d.name;
+    if (d.total_tracks) info.tracks_total = d.total_tracks;
+    scheduleRender();
+    return;
+  }
+
+  if (t === 'link.complete') {
+    const info = ensureProvider(d.provider).links[d.link];
+    if (info) {
+      info.status = linkStatusFromCode(d.code);
+      info.code = d.code;
+      if (d.name) info.name = d.name;
+      info.current_title = '';
+      finalizeTrackStates(d.provider, d.link, info);
     }
+    scheduleRender();
+    return;
+  }
 
-    // ── Link lifecycle events ──
-    if (d.type === 'link.started') {
-      const p = ensureProvider(d.provider);
-      const linkId = d.link;
-      if (!p.links[linkId]) {
-        p.links[linkId] = {
-          name: d.name || linkId.split('/').pop() || linkId,
-          image: null,
-          status: 'running',
-          tracks_done: 0,
-          tracks_total: d.total_tracks || 0,
-          current_title: '',
-          code: null,
-        };
-      } else {
-        p.links[linkId].status = 'running';
-        // Always take the resolved name. The old guard compared against
-        // linkId.split('/').pop(), which keeps the "?si=..." query string,
-        // while the placeholder set in startJob() strips it — so the two never
-        // matched and the card kept showing the bare Spotify ID.
-        if (d.name) p.links[linkId].name = d.name;
-        if (d.total_tracks) {
-          p.links[linkId].tracks_total = d.total_tracks;
-        }
-      }
-      scheduleRender();
-      return;
+  // Full track list with each track's saved status — ticks off what an
+  // earlier run already has before anything downloads.
+  if (t === 'link.metadata') {
+    const info = ensureProvider(d.provider).links[d.link];
+    if (info && d.tracks) {
+      info.tracks = d.tracks.map((tr, i) => ({ ...tr, num: i + 1, status: tr.status || 'pending' }));
+      info.tracks_total = d.tracks.length;
+      initTrackIndex(info);
+      info._trackSigSalt = (info._trackSigSalt || 0) + 1;
     }
+    syncAccordion();
+    return;
+  }
 
-    if (d.type === 'link.complete') {
-      const p = ensureProvider(d.provider);
-      const linkId = d.link;
-      if (p.links[linkId]) {
-        p.links[linkId].status = d.code === 0 ? 'complete' : 'failed';
-        p.links[linkId].code = d.code;
-        if (d.name) p.links[linkId].name = d.name;
-        // The run is over, so nothing can still be in flight. Anything left
-        // spinning failed; anything never started was unavailable (Spotify
-        // local files, for instance, are never fetched).
-        finalizeTrackStates(d.provider, linkId, p.links[linkId]);
-      }
-      scheduleRender();
-      return;
+  if (t === 'track.progress' || t === 'track.log') {
+    const p = ensureProvider(d.provider);
+    const info = p.links[d.link] || (p.links[d.link] = newLink(d.link, '', 'running'));
+    if (d.event === 'log') { pushPlaylistLog(d.provider, d.link, d.line); return; }
+    applyTrackEvent(info, d);
+    if (info.tracks && info.tracks.length && !info.tracks_total) info.tracks_total = info.tracks.length;
+    if (info._tallyDone !== undefined) info.tracks_done = Math.max(info._doneCount || 0, info._tallyDone);
+    updateTrackStatusDOM(d.provider, d.link, info);
+    scheduleRender();
+    return;
+  }
+
+  if (t === 'provider.cooldown' || t === 'provider.rate') {
+    const p = ensureProvider(d.provider);
+    if (d.rate) p.rate = d.rate;
+    if (d.workers) p.workers = d.workers;
+    if (t === 'provider.cooldown') {
+      p.cooldownUntil = Date.now() + (d.seconds || 0) * 1000;
+      p.cooldownReason = d.reason || '';
+      startCooldownTicker();
+      announce(`${(PROVIDER_BRANDS[d.provider] || {}).label || d.provider} is rate-limiting. Downloads resume in ${fmtClock(d.seconds * 1000)}.`);
     }
+    scheduleRender();
+    return;
+  }
 
-    // ── Full track list (Spotify metadata pre-fetch) ──
-    if (d.type === 'link.metadata') {
-      const p = ensureProvider(d.provider);
-      const linkId = d.link;
-      if (p.links[linkId] && d.tracks) {
-        p.links[linkId].tracks = d.tracks.map((t, i) => ({
-          ...t,
-          num: i + 1,
-          status: 'pending',
-        }));
-        p.links[linkId].tracks_total = d.tracks.length;
-        initTrackIndex(p.links[linkId]);
-        // Bump the signature so getTrackListEl() rebuilds with the full list
-        p.links[linkId]._trackSigSalt = (p.links[linkId]._trackSigSalt || 0) + 1;
+  if (t === 'done' || (t.startsWith('job.') && t !== 'job.started')) finishLive(d);
+}
+
+function applyTrackEvent(info, d) {
+  if (d.event === 'track') {
+    // "Downloading item X of Y" — the authoritative position.
+    info.tracks_total = d.total;
+    info._currentItem = d.current;
+    ensureTracks(info, d.total);
+    const tr = info.tracks[d.current - 1];
+    info.current_title = tr && !isPlaceholder(tr.title) ? tr.title : `Track ${d.current} of ${d.total}`;
+    setTrackStatus(info, tr, 'downloading');
+  } else if (d.event === 'track_active') {
+    const title = cleanTrackTitle(d.filename || '');
+    if (title) info.current_title = title;
+    const tr = info.tracks && info._currentItem ? info.tracks[info._currentItem - 1] : null;
+    if (tr) { if (isPlaceholder(tr.title)) setTrackTitle(info, tr, title); setTrackStatus(info, tr, 'downloading'); }
+  } else if (d.event === 'track_complete') {
+    const title = cleanTrackTitle(d.filename || d.title || '');
+    if (d.index) ensureTracks(info, d.index);
+    if (!info.tracks) return;
+    let target = null;
+    if (d.index) target = info.tracks[d.index - 1] || null;          // exact (engine)
+    else if (d.recovered) {
+      const idx = lookupTrack(info, title);                           // one named track
+      if (idx !== undefined) target = info.tracks[idx];
+    } else {
+      target = info._currentItem ? info.tracks[info._currentItem - 1] : null;
+      if ((!target || target.status === 'downloaded') && title) {
+        const idx = lookupTrack(info, title);
+        if (idx !== undefined) target = info.tracks[idx];
       }
-      syncAccordion();
-      return;
+      if (!target || target.status === 'downloaded') target = nextPending(info);
     }
-
-    // ── Track-level progress ──
-    if (d.type === 'track.progress' || d.type === 'track.log') {
-      const p = ensureProvider(d.provider);
-      const linkId = d.link;
-      if (!p.links[linkId]) {
-        p.links[linkId] = {
-          name: linkId.split('/').pop() || linkId,
-          image: null,
-          status: 'running',
-          tracks_done: 0,
-          tracks_total: 0,
-          current_title: '',
-          code: null,
-        };
-      }
-      const info = p.links[linkId];
-
-      // Subprocess output routed to this playlist's own log pane
-      if (d.event === 'log') {
-        pushPlaylistLog(d.provider, linkId, d.line);
-        return;
-      }
-
-      if (d.event === 'track') {
-        // "Downloading item X of Y" is the authoritative position for yt-dlp
-        // and scdl — trust it rather than a locally incremented counter.
-        info.tracks_total = d.total;
-        info._currentItem = d.current;
-        info.current_title = `Track ${d.current}/${d.total}`;
-        // No-op once the list is already that long (a Spotify metadata list,
-        // or placeholders a resume's archive skips created ahead of this).
-        ensureTracks(info, d.total);
-        setTrackStatus(info, info.tracks[d.current - 1], 'downloading');
-      } else if (d.event === 'track_active') {
-        // Names the track currently in flight; not a completion.
-        const title = cleanTrackTitle(d.filename || '');
-        if (title) info.current_title = title;
-        const t = info.tracks && info._currentItem
-          ? info.tracks[info._currentItem - 1] : null;
-        if (t) {
-          if (isPlaceholder(t.title)) setTrackTitle(info, t, title);
-          setTrackStatus(info, t, 'downloading');
-        }
-      } else if (d.event === 'track_complete') {
-        const title = cleanTrackTitle(d.filename || d.title || '');
-        info.current_title = d.archived ? `⏭ ${title} (already had)` : title;
-        // An archive skip names its own playlist position and arrives before
-        // anything has established how long the playlist is, so it both sizes
-        // the list and picks its own row — no cursor guessing.
-        if (d.index) ensureTracks(info, d.index);
-        if (info.tracks) {
-          // Resolution order, all O(1): authoritative item index -> title map
-          // -> the running "first still-pending" pointer. Previously each of
-          // these was an Array.find() over every track, making a full run
-          // O(tracks^2) — 3.5s for a 5.7k-track batch.
-          let target = null;
-          if (d.index) {
-            // The event carries its own position (archive skips do), which
-            // beats every fallback below — those assume the completion refers
-            // to whatever was last seen in flight.
-            target = info.tracks[d.index - 1] || null;
-          } else if (d.recovered) {
-            // A recovery result names exactly one track. Positional fallbacks
-            // would credit the wrong row, so resolve by title only.
-            const idx = lookupTrack(info, title);
-            if (idx !== undefined) target = info.tracks[idx];
-          } else {
-            target = info._currentItem ? info.tracks[info._currentItem - 1] : null;
-            if ((!target || target.status === 'downloaded') && title) {
-              const idx = lookupTrack(info, title);
-              if (idx !== undefined) target = info.tracks[idx];
-            }
-            if (!target || target.status === 'downloaded') target = nextPending(info);
-          }
-          if (target) {
-            if (isPlaceholder(target.title)) setTrackTitle(info, target, title);
-            if (d.recovered) target.recovered = true;
-            if (d.archived) target.archived = true;
-            setTrackStatus(info, target, 'downloaded');
-          }
-        }
-      } else if (d.event === 'searching') {
-        info.current_title = '🔍 ' + d.query;
-        if (info.tracks) {
-          const idx = lookupTrack(info, d.query);
-          if (idx !== undefined) setTrackStatus(info, info.tracks[idx], 'downloading');
-        }
-      } else if (d.event === 'track_retry') {
-        // Second attempt via our own YouTube search
-        let idx;
-        if (d.track_id && info._idIndex) idx = info._idIndex.get(d.track_id);
-        if (idx === undefined && d.title) idx = lookupTrack(info, d.title);
-        if (idx !== undefined) {
-          const t = info.tracks[idx];
-          t.error = '';
-          setTrackStatus(info, t, 'retrying');
-        }
-        info.current_title = '🔁 retrying ' + (d.title || '');
-      } else if (d.event === 'track_failed') {
-        // Failures arrive either keyed by Spotify id (end-of-run summary) or
-        // by title only ("No results found for song: X").
-        let idx;
-        if (d.track_id && info._idIndex) idx = info._idIndex.get(d.track_id);
-        if (idx === undefined && d.title) idx = lookupTrack(info, d.title);
-        // SoundCloud errors carry neither id nor title — only the item that
-        // was in flight, reported as a 1-based playlist index.
-        if (idx === undefined && d.index) idx = d.index - 1;
-        const target = idx !== undefined && info.tracks ? info.tracks[idx] : null;
-        if (target) {
-          target.error = d.error || 'Download failed';
-          setTrackStatus(info, target, 'failed');
-        }
-      } else if (d.event === 'tally') {
-        // spotdl's own "N/M complete" counter. Authoritative for the bar even
-        // when a title didn't resolve to a row in the list.
-        if (d.total) info.tracks_total = d.total;
-        info._tallyDone = d.done;
-      } else if (d.event === 'error') {
-        info.status = 'failed';
-      }
-
-      if (info.tracks && info.tracks.length && !info.tracks_total) {
-        info.tracks_total = info.tracks.length;
-      }
-      if (info._tallyDone !== undefined) {
-        info.tracks_done = Math.max(info._doneCount || 0, info._tallyDone);
-      }
-
-      // Patch only the rows whose status actually changed
-      updateTrackStatusDOM(d.provider, d.link, info);
-      scheduleRender();
-      return;
+    if (target) {
+      if (isPlaceholder(target.title)) setTrackTitle(info, target, title);
+      if (d.recovered) target.recovered = true;
+      if (d.copied) target.copied = true;
+      if (d.archived) target.archived = true;
+      setTrackStatus(info, target, 'downloaded');
+      info.current_title = target.title;
     }
-
-    // ── Done ──
-    if (d.type === 'done' || d.type === 'job.completed' || d.type === 'job.failed' || d.type === 'job.cancelled') {
-      if (es) es.close();
-      // Belt and braces: resolve every remaining spinner. link.complete
-      // normally does this per playlist, but if one is ever missed (dropped
-      // event, cancelled run) the job ending must still settle the UI.
-      for (const [prov, pdata] of Object.entries(liveState.providers)) {
-        for (const [lk, info] of Object.entries(pdata.links)) {
-          if (info.status === 'running' || info.status === 'pending') {
-            info.status = d.type === 'job.completed' ? 'complete' : 'failed';
-          }
-          finalizeTrackStates(prov, lk, info);
-        }
-      }
-      syncAccordion();   // flush any pending debounced update
-      document.getElementById('btn-start').disabled = false;
-      document.getElementById('btn-cancel').disabled = true;
-      const status = d.status || (d.type === 'job.completed' ? 'completed' : 'failed');
-      document.getElementById('status-indicator').textContent = '● ' + status;
-      document.getElementById('status-indicator').className = status === 'completed' ? 'status-idle' : 'status-error';
+  } else if (d.event === 'searching') {
+    info.current_title = 'Finding ' + d.query;
+    if (info.tracks) {
+      const idx = lookupTrack(info, d.query);
+      if (idx !== undefined) setTrackStatus(info, info.tracks[idx], 'downloading');
     }
+  } else if (d.event === 'track_retry') {
+    // Spotify: a second attempt via our own YouTube search (id or title).
+    // Engine: a track back in the queue after a rate limit (its index).
+    let idx;
+    if (d.index) idx = d.index - 1;
+    if (idx === undefined && d.track_id && info._idIndex) idx = info._idIndex.get(d.track_id);
+    if (idx === undefined && d.title) idx = lookupTrack(info, d.title);
+    const tr = idx !== undefined && info.tracks ? info.tracks[idx] : null;
+    if (tr) { tr.error = ''; setTrackStatus(info, tr, 'retrying'); }
+  } else if (d.event === 'track_failed') {
+    let idx;
+    if (d.track_id && info._idIndex) idx = info._idIndex.get(d.track_id);
+    if (idx === undefined && d.title) idx = lookupTrack(info, d.title);
+    if (idx === undefined && d.index) idx = d.index - 1;
+    const tr = idx !== undefined && info.tracks ? info.tracks[idx] : null;
+    if (tr) {
+      tr.error = d.error || 'Download failed';
+      if (info._dirty) info._dirty.add(tr.num);
+      setTrackStatus(info, tr, d.unavailable ? 'unavailable' : 'failed');
+    }
+  } else if (d.event === 'tally') {
+    if (d.total) info.tracks_total = d.total;
+    info._tallyDone = d.done;
+  } else if (d.event === 'error') {
+    info.status = 'failed';
   }
 }
 
-// ── Render scheduling ──────────────────────────────────────────────────
-// syncAccordion() patches existing DOM in place, so it is cheap enough to
-// run on a short tick. Nothing is destroyed, so CSS animations never restart.
-let _renderTimer = null;
+function finishLive(d) {
+  if (es) { es.close(); es = null; }
+  const status = d.status || (d.type === 'job.completed' ? 'completed' : 'failed');
+  for (const [prov, pdata] of Object.entries(liveState.providers)) {
+    pdata.cooldownUntil = 0;
+    for (const [lk, info] of Object.entries(pdata.links)) {
+      if (info.status === 'running' || info.status === 'pending') {
+        info.status = status === 'completed' ? 'complete'
+          : status === 'cancelled' ? 'cancelled' : status === 'partial' ? 'partial' : 'failed';
+      }
+      finalizeTrackStates(prov, lk, info);
+    }
+  }
+  syncAccordion();
+  setRunStatus(STATUS_LABEL[status] ? status : 'idle');
+  if (d.title) {
+    announce(d.title + '. ' + (d.summary || ''));
+    if ('Notification' in window && Notification.permission === 'granted' && document.visibilityState !== 'visible') {
+      try { new Notification(d.title, { body: d.summary || '' }); } catch (_) { /* unsupported */ }
+    }
+  }
+  libraryStale = true;
+  pollStatus();
+  // The Links list shows each playlist's sync state; refresh it, unless a
+  // label is mid-edit.
+  if (!rawDirty && !$('link-list').contains(document.activeElement)) loadLinks();
+}
+
+$('btn-cancel').addEventListener('click', async () => {
+  if (!lastStatus || !lastStatus.current_job_id) return;
+  setRunStatus('stopping');
+  try { await api('/api/jobs/' + lastStatus.current_job_id, { method: 'DELETE' }); }
+  catch (e) { toast(e.message, 'bad'); }
+});
+
+// ── Live: DOM ───────────────────────────────────────────────────────────
+// Nodes are built once and patched in place: rebuilding restarted every CSS
+// transition and was the old "flashing". Track rows are only built when a
+// playlist is expanded — 5k rows up front made big runs heavy.
+
+let renderTimer = null;
 function scheduleRender() {
-  if (_renderTimer) return;
-  _renderTimer = setTimeout(() => {
-    _renderTimer = null;
-    syncAccordion();
-  }, 120);
+  if (renderTimer) return;
+  renderTimer = setTimeout(() => { renderTimer = null; syncAccordion(); }, 120);
 }
-// Back-compat alias — older call sites expect renderAccordion()
-function renderAccordion() { syncAccordion(); }
 
-// ── Persistent DOM cache ───────────────────────────────────────────────
-// The previous implementation rebuilt the whole accordion with innerHTML on
-// every update. That recreated every card element, which (a) restarted the
-// cardSlideIn/badgePulse/shimmer CSS animations — the visible "flashing" —
-// and (b) defeated `transition: width` on progress bars, since transitions
-// never run on freshly-created nodes. We now build each node once and mutate
-// only the values that actually changed.
-const domCache = { providers: {} };      // provider -> {section, body, arrow, stats, badge, cards}
-const trackListCache = {};               // "provider|linkId" -> {el, sig}
-
-function setText(el, v) {
-  if (el && el.textContent !== v) el.textContent = v;
-}
-function setClass(el, v) {
-  if (el && el.className !== v) el.className = v;
-}
-function setWidth(el, pct) {
-  const w = pct + '%';
-  if (el && el.style.width !== w) el.style.width = w;
-}
+const domCache = { providers: {} };
+const trackListCache = {};
+let uid = 0;
 
 function resetLiveDOM() {
   for (const k of Object.keys(domCache.providers)) delete domCache.providers[k];
   for (const k of Object.keys(trackListCache)) delete trackListCache[k];
-  const root = document.getElementById('provider-accordion');
-  if (root) root.innerHTML = '';
+  $('provider-accordion').textContent = '';
 }
 
-// ── Track list (own cache; rebuilt only when its content signature changes) ──
+const TRACK_ICON = { downloaded: 'check', downloading: 'loader', failed: 'x', unavailable: 'ban', retrying: 'refresh', pending: 'clock' };
+const TRACK_WORD = { downloaded: 'Downloaded', downloading: 'Downloading', failed: 'Failed', unavailable: 'Unavailable', retrying: 'Retrying', pending: 'To do' };
 
-function trackSignature(info) {
-  const t = info.tracks || [];
-  // Length + per-status tally is enough to know whether a rebuild is needed;
-  // individual status flips are patched in place by updateTrackStatusDOM().
-  return t.length + ':' + (info._trackSigSalt || 0);
+function trackNote(t) {
+  if (t.status === 'failed' || t.status === 'unavailable') return t.error || (t.status === 'failed' ? 'Download failed' : 'Not available at the source');
+  if (t.recovered) return 'Recovered by searching YouTube after spotdl’s match failed';
+  if (t.copied) return 'Copied from another playlist that already had it';
+  return '';
 }
 
-const TRACK_ICON = {
-  downloaded: '✅', downloading: '🔄', failed: '❌', unavailable: '🚫',
-  retrying: '🔁',
-};
-const TRACK_CLASS = {
-  downloaded: 'track-done', downloading: 'track-active',
-  failed: 'track-failed', unavailable: 'track-unavailable',
-  retrying: 'track-retry',
-};
-function trackIcon(s) { return TRACK_ICON[s] || '⏳'; }
-function trackClass(s) { return 'track-row ' + (TRACK_CLASS[s] || 'track-pending'); }
-
-// Builds the list and returns direct references to every mutable node, so
-// status updates never need a DOM query. Searching for rows by attribute
-// selector on each event was O(tracks x events) — the dominant cost for
-// long playlists.
-function buildTrackList(info) {
+function buildTrackList(info, id) {
   const tracks = info.tracks || [];
   const el = mk('div', 'track-list');
-  const downloaded = tracks.filter(t => t.status === 'downloaded').length;
-  const header = mk('div', 'track-list-header', `Tracks (${downloaded}/${tracks.length})`);
+  el.id = id;
+  const header = mk('div', 'track-head');
   el.appendChild(header);
-
   const rows = {};
-  const frag = document.createDocumentFragment ? document.createDocumentFragment() : el;
+  const frag = document.createDocumentFragment();
   for (const t of tracks) {
-    const row = mk('div', trackClass(t.status));
-    row.dataset.trackNum = t.num;
-    const iconEl = mk('span', 'track-icon', trackIcon(t.status));
-    const numEl = mk('span', 'track-num', t.num == null ? '' : String(t.num));
-    const titleEl = mk('span', 'track-title', t.title || '');
-    row.appendChild(iconEl);
-    row.appendChild(numEl);
-    row.appendChild(titleEl);
-    const artistStr = (t.artists || []).join(', ');
-    if (artistStr) row.appendChild(mk('span', 'track-artist', artistStr));
+    const row = mk('div', 'trk');
+    row.dataset.s = t.status || 'pending';
+    const ic = icon(TRACK_ICON[t.status] || 'clock');
+    const sr = mk('span', 'sr-only', TRACK_WORD[t.status] || 'To do');
+    const num = mk('span', 'trk-num num', String(t.num));
+    const title = mk('span', 'trk-title', t.title || '');
+    const artist = mk('span', 'trk-artist', (t.artists || []).join(', '));
+    const note = mk('span', 'trk-note', trackNote(t));
+    note.hidden = !note.textContent;
+    row.append(ic, sr, num, title, artist, note);
     frag.appendChild(row);
-    rows[t.num] = { row, iconEl, titleEl };
+    rows[t.num] = { row, ic, sr, title, note };
   }
-  if (frag !== el) el.appendChild(frag);
+  el.appendChild(frag);
   return { el, header, rows };
 }
 
-function getTrackListEl(provider, linkId, info) {
+function getTrackList(provider, linkId, info, id) {
   const key = provider + '|' + linkId;
-  const sig = trackSignature(info);
+  const sig = (info.tracks || []).length + ':' + (info._trackSigSalt || 0);
   let entry = trackListCache[key];
-  if (!entry) {
-    entry = buildTrackList(info);
-    entry.sig = sig;
-    trackListCache[key] = entry;
-  } else if (entry.sig !== sig) {
-    const fresh = buildTrackList(info);
+  if (!entry || entry.sig !== sig) {
+    const fresh = buildTrackList(info, id);
     fresh.sig = sig;
-    if (entry.el.parentNode) entry.el.parentNode.replaceChild(fresh.el, entry.el);
-    trackListCache[key] = fresh;
-    entry = fresh;
+    if (entry && entry.el.parentNode) entry.el.parentNode.replaceChild(fresh.el, entry.el);
+    trackListCache[key] = entry = fresh;
+    renderTrackHeader(entry, info);
   }
   return entry.el;
 }
 
-// Patch only the rows flagged dirty, via cached refs — no queries, no
-// rebuild, no animation restart, and no full-list scan per event.
+function renderTrackHeader(entry, info) {
+  let done = 0, bad = 0, na = 0, had = 0, copied = 0;
+  for (const t of info.tracks) {
+    if (t.status === 'downloaded') done++;
+    else if (t.status === 'failed') bad++;
+    else if (t.status === 'unavailable') na++;
+    if (t.archived) had++;
+    if (t.copied) copied++;
+  }
+  const parts = [`${done} of ${info.tracks.length} downloaded`];
+  if (had) parts.push(`${had} from earlier runs`);
+  if (copied) parts.push(`${copied} copied from other playlists`);
+  if (bad) parts.push(`${bad} failed`);
+  if (na) parts.push(`${na} unavailable`);
+  setText(entry.header, parts.join(' · '));
+}
+
 function updateTrackStatusDOM(provider, linkId, info) {
   const entry = trackListCache[provider + '|' + linkId];
-  // Nothing rendered yet (list still collapsed) — state is kept in `info`
-  // and the DOM is built on first expand.
   if (!entry || !info.tracks) return;
-
   const dirty = info._dirty;
   if (dirty && dirty.size) {
     for (const num of dirty) {
       const ref = entry.rows[num];
       const t = info.tracks[num - 1];
       if (!ref || !t) continue;
-      setClass(ref.row, trackClass(t.status));
-      setText(ref.iconEl, trackIcon(t.status));
-      if (t.title) setText(ref.titleEl, t.title);
-      const tip = t.status === 'failed' ? (t.error || 'Download failed')
-        : t.status === 'unavailable' ? 'Not available on Spotify (local file)'
-        : t.status === 'retrying' ? 'Retrying via YouTube search'
-        : t.recovered ? 'Recovered by YouTube search after Spotify match failed'
-        : t.archived ? 'Already downloaded on an earlier run — skipped'
-        : '';
-      if (ref.row.title !== tip) ref.row.title = tip;
+      const s = t.status || 'pending';
+      if (ref.row.dataset.s !== s) ref.row.dataset.s = s;
+      setIcon(ref.ic, TRACK_ICON[s] || 'clock');
+      setText(ref.sr, TRACK_WORD[s] || 'To do');
+      if (t.title) setText(ref.title, t.title);
+      const note = trackNote(t);
+      setText(ref.note, note);
+      ref.note.hidden = !note;
     }
     dirty.clear();
   }
-  let hdr = `Tracks (${info._doneCount || 0}/${info.tracks.length})`;
-  let bad = 0, na = 0, rec = 0, had = 0;
-  for (const t of info.tracks) {
-    if (t.status === 'failed') bad++;
-    else if (t.status === 'unavailable') na++;
-    if (t.recovered) rec++;
-    if (t.archived) had++;
-  }
-  if (had) hdr += `  ·  ${had} already had`;
-  if (rec) hdr += `  ·  ${rec} recovered`;
-  if (bad) hdr += `  ·  ${bad} failed`;
-  if (na) hdr += `  ·  ${na} unavailable`;
-  setText(entry.header, hdr);
-}
-
-// ── Structure builders (run once per provider / per card) ──────────────
-
-// Explicit element construction — avoids an HTML parse per card and yields
-// direct node references, so no querySelector is needed on the hot path.
-function mk(tag, className, text) {
-  const el = document.createElement(tag);
-  if (className) el.className = className;
-  if (text !== undefined) el.textContent = text;
-  return el;
+  renderTrackHeader(entry, info);
 }
 
 function ensureProviderSection(p) {
   let entry = domCache.providers[p];
   if (entry) return entry;
+  const root = $('provider-accordion');
+  const empty = root.querySelector('.empty');
+  if (empty) empty.remove();
 
-  const root = document.getElementById('provider-accordion');
-  const placeholder = root.querySelector('.muted');
-  if (placeholder) placeholder.remove();
-
-  const section = mk('div', 'provider-section');
+  const section = mk('section', 'lane');
   section.dataset.provider = p;
+  const head = mk('h2', 'lane-head');
+  const toggle = mk('button', 'lane-toggle');
+  toggle.type = 'button';
+  const bodyId = 'lane-' + p;
+  toggle.setAttribute('aria-controls', bodyId);
+  toggle.setAttribute('aria-expanded', 'true');
+  toggle.append(icon('chevron'), brandMark(p, 18), mk('span', '', (PROVIDER_BRANDS[p] || {}).label || p));
+  toggle.addEventListener('click', () => toggleProvider(p));
+  const stats = mk('span', 'lane-stats num');
+  const rate = mk('span', 'lane-rate');
+  const state = mk('span', 'lane-state');
+  head.append(toggle, stats, rate, state);
+  const body = mk('div', 'lane-body');
+  body.id = bodyId;
+  section.append(head, body);
 
-  const header = mk('div', 'provider-header');
-  const arrow = mk('span', 'provider-arrow', '▼');
-  const icon = providerIconEl(p, 'provider-icon');
-  const nameEl = mk('span', 'provider-name', p.toUpperCase());
-  const stats = mk('span', 'provider-stats', '');
-  const badge = mk('span', 'badge badge-pending', '');
-  header.appendChild(arrow);
-  header.appendChild(icon);
-  header.appendChild(nameEl);
-  header.appendChild(stats);
-  header.appendChild(badge);
-  header.addEventListener('click', () => toggleProvider(p));
-
-  const body = mk('div', 'provider-body');
-  body.dataset.providerBody = p;
-
-  section.appendChild(header);
-  section.appendChild(body);
-
-  // Keep providers in a stable visual order regardless of arrival order
+  // Stable provider order regardless of which reports first.
   const idx = PROVIDER_ORDER.indexOf(p);
-  let inserted = false;
-  for (const sib of Array.from(root.children)) {
-    const sIdx = PROVIDER_ORDER.indexOf(sib.dataset.provider);
-    if (sIdx > idx) { root.insertBefore(section, sib); inserted = true; break; }
-  }
-  if (!inserted) root.appendChild(section);
+  const after = Array.from(root.children).find(s => PROVIDER_ORDER.indexOf(s.dataset.provider) > idx);
+  root.insertBefore(section, after || null);
 
-  entry = { section, body, arrow, stats, badge, cards: {} };
+  entry = { section, body, toggle, stats, rate, state, cards: {} };
   domCache.providers[p] = entry;
   return entry;
 }
@@ -927,272 +1182,484 @@ function ensureCard(provider, linkId) {
   const pEntry = ensureProviderSection(provider);
   let card = pEntry.cards[linkId];
   if (card) return card;
+  const n = ++uid;
 
-  const root = mk('div', 'playlist-card card-pending');
-  root.dataset.provider = provider;
-  root.dataset.link = linkId;
+  const root = mk('article', 'pl-row');
+  const line = mk('div', 'pl-line');
+  const toggle = mk('button', 'icon-btn pl-toggle');
+  toggle.type = 'button';
+  toggle.setAttribute('aria-expanded', 'false');
+  toggle.setAttribute('aria-controls', 'tracks-' + n);
+  toggle.appendChild(icon('chevron'));
+  toggle.addEventListener('click', () => toggleTracks(provider, linkId));
 
-  const headerRow = mk('div', 'card-header-row');
-  const expandIcon = mk('span', 'card-expand-icon', '');
-  const info = mk('div', 'card-info');
-  // The name opens the source playlist. stopPropagation keeps the click from
-  // also toggling the track list underneath it.
-  const nameEl = mk('a', 'card-name', '');
-  if (/^https?:\/\//i.test(linkId)) {
-    nameEl.href = linkId;
-    nameEl.target = '_blank';
-    nameEl.rel = 'noopener noreferrer';
-    nameEl.addEventListener('click', (e) => e.stopPropagation());
-  }
-  const subtitle = mk('div', 'card-subtitle', '');
-  const progress = mk('div', 'card-progress');
-  const barOuter = mk('div', 'progress-bar');
-  const fill = mk('div', 'fill', '');
-  fill.style.width = '0%';
-  const count = mk('span', 'card-count', '');
+  const main = mk('div', 'pl-main');
+  const name = mk('a', 'pl-name');
+  if (/^https?:\/\//i.test(linkId)) { name.href = linkId; name.target = '_blank'; name.rel = 'noopener noreferrer'; }
+  const sub = mk('div', 'pl-sub');
+  const state = mk('span', 'pl-state');
+  const stateIcon = icon('clock');
+  const stateText = mk('span');
+  state.append(stateIcon, stateText);
+  const now = mk('span', 'pl-now');
+  sub.append(state, now);
+  main.append(name, sub);
 
-  barOuter.appendChild(fill);
-  progress.appendChild(barOuter);
-  progress.appendChild(count);
-  info.appendChild(nameEl);
-  info.appendChild(subtitle);
-  info.appendChild(progress);
-  headerRow.appendChild(expandIcon);
-  headerRow.appendChild(providerIconEl(provider, 'card-brand'));
-  headerRow.appendChild(info);
-  headerRow.addEventListener('click', () => toggleTracks(provider, linkId));
+  const progress = mk('div', 'progress');
+  const bar = mk('div', 'bar');
+  const fill = mk('div', 'fill');
+  bar.appendChild(fill);
+  const count = mk('span', 'num');
+  progress.append(bar, count);
 
-  const actions = mk('div', 'card-actions');
-  const logBtn = mk('button', 'mini-btn', '📜 Log');
-  logBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    togglePlaylistLog(provider, linkId);
-  });
-  actions.appendChild(logBtn);
+  const logBtn = mk('button', 'icon-btn');
+  logBtn.type = 'button';
+  logBtn.setAttribute('aria-expanded', 'false');
+  logBtn.setAttribute('aria-controls', 'log-' + n);
+  logBtn.appendChild(icon('terminal'));
+  logBtn.addEventListener('click', () => togglePlaylistLog(provider, linkId));
 
-  const logPane = mk('pre', 'card-log');
-  logPane.style.display = 'none';
-
-  root.appendChild(headerRow);
-  root.appendChild(actions);
-  root.appendChild(logPane);
+  line.append(toggle, main, progress, logBtn);
+  const logPane = mk('pre', 'pl-log-pane');
+  logPane.id = 'log-' + n;
+  logPane.hidden = true;
+  logPane.tabIndex = 0;
+  root.append(line, logPane);
   pEntry.body.appendChild(root);
 
-  card = { root, headerRow, logPane, expandIcon, name: nameEl, subtitle, fill, count };
+  card = { root, toggle, name, stateIcon, stateText, now, fill, count, logBtn, logPane, tracksId: 'tracks-' + n };
   pEntry.cards[linkId] = card;
   return card;
 }
 
-// ── Sync: patch values only ────────────────────────────────────────────
+const CARD_STATE = {
+  running: ['loader', 'Downloading'], pending: ['clock', 'Queued'], complete: ['check', 'Done'],
+  failed: ['x', 'Failed'], partial: ['alert', ''], cancelled: ['stop', ''],
+};
 
 function syncAccordion() {
   const provs = liveState.providers;
-  const root = document.getElementById('provider-accordion');
-  if (!root) return;
-
+  const root = $('provider-accordion');
   if (!Object.keys(provs).length) {
-    if (!root.querySelector('.muted')) {
-      root.innerHTML = '<p class="muted">Waiting for downloads to start...</p>';
-    }
+    if (!root.firstChild) root.appendChild(mk('p', 'empty', 'Nothing running. Start a download from Links.'));
     return;
   }
-
   for (const p of PROVIDER_ORDER) {
     const data = provs[p];
-    if (!data) continue;
-
+    if (!data || !Object.keys(data.links).length) continue;
     const pEntry = ensureProviderSection(p);
     const links = Object.values(data.links);
-    const linkCount = links.length;
-    const running = links.filter(l => l.status === 'running').length;
-    const done = links.filter(l => l.status === 'complete').length;
-    const failed = links.filter(l => l.status === 'failed').length;
-    const pending = links.filter(l => l.status === 'pending').length;
+    const count = s => links.filter(l => l.status === s).length;
+    const running = count('running'), pending = count('pending'), done = count('complete');
+    const failed = count('failed'), incomplete = count('partial') + count('cancelled');
     const totalTracks = links.reduce((s, l) => s + (l.tracks_total || 0), 0);
-    const doneTracks = links.reduce(
-      (s, l) => s + (l.status === 'complete' ? (l.tracks_total || l.tracks_done || 0) : (l.tracks_done || 0)), 0);
+    const doneTracks = links.reduce((s, l) => s + (l.status === 'complete' ? (l.tracks_total || l.tracks_done || 0) : (l.tracks_done || 0)), 0);
 
     const expanded = data.expanded !== false;
-    setText(pEntry.arrow, expanded ? '▼' : '▶');
-    if (pEntry.body.style.display !== (expanded ? '' : 'none')) {
-      pEntry.body.style.display = expanded ? '' : 'none';
-    }
-    setText(pEntry.stats, `${linkCount} playlist(s) · ${doneTracks}/${totalTracks || '?'} tracks`);
+    setAttr(pEntry.toggle, 'aria-expanded', String(expanded));
+    pEntry.body.hidden = !expanded;
+    setText(pEntry.stats, `${doneTracks}/${totalTracks || '?'} tracks`);
 
-    if (running > 0) {
-      setClass(pEntry.badge, 'badge badge-running');
-      setText(pEntry.badge, `${running} running`);
-    } else if (pending > 0) {
-      setClass(pEntry.badge, 'badge badge-pending');
-      setText(pEntry.badge, `${pending} queued`);
-    } else if (failed > 0 && done === 0) {
-      setClass(pEntry.badge, 'badge badge-failed');
-      setText(pEntry.badge, `${failed} failed`);
+    const coolLeft = (data.cooldownUntil || 0) - Date.now();
+    if (coolLeft > 0) {
+      pEntry.rate.className = 'lane-rate cooling';
+      setText(pEntry.rate, `Rate-limited — resuming in ${fmtClock(coolLeft)}` + (data.rate ? ` at ${Math.round(data.rate)}/min` : ''));
+      if (pEntry.rate.title !== data.cooldownReason) pEntry.rate.title = data.cooldownReason || '';
     } else {
-      setClass(pEntry.badge, 'badge badge-ok');
-      setText(pEntry.badge, `${done}/${linkCount} done`);
+      pEntry.rate.className = 'lane-rate';
+      setText(pEntry.rate, data.rate ? `${Math.round(data.rate)} tracks/min` + (data.workers ? ` · ${data.workers} at a time` : '') : '');
     }
+
+    const [cls, label] = running ? ['running', `${running} downloading`]
+      : pending ? ['', `${pending} queued`]
+      : failed && !done ? ['bad', `${failed} failed`]
+      : incomplete ? ['warn', `${incomplete} incomplete`]
+      : ['ok', `${done}/${links.length} done`];
+    pEntry.state.className = 'lane-state' + (cls ? ' ' + cls : '');
+    setText(pEntry.state, label);
 
     for (const [linkId, info] of Object.entries(data.links)) {
       const card = ensureCard(p, linkId);
       const tracks = info.tracks || [];
       const hasTracks = tracks.length > 0;
-      // Track lists start collapsed and their rows are only built on first
-      // expand. Rendering every track up front cost ~28k DOM nodes for a
-      // 5.7k-track batch, which is what made big runs feel heavy.
-      const cardExpanded = info.expanded === true;
+      setAttr(card.root, 'data-state', info.status);
+      setText(card.name, info.name || linkId);
+
+      // "Left" is only counted for a finished card; per render it'd be O(tracks).
+      const stopped = info.status === 'partial' || info.status === 'cancelled';
+      const left = stopped && hasTracks ? tracks.filter(t => t.status !== 'downloaded' && t.status !== 'unavailable').length : 0;
+      const [ic, word] = CARD_STATE[info.status] || CARD_STATE.pending;
+      setIcon(card.stateIcon, ic);
+      setText(card.stateText, info.status === 'partial' ? `${left || 'Some'} left — run again to finish`
+        : info.status === 'cancelled' ? `Stopped — ${left} left` : word);
+      setText(card.now, info.status === 'running' && info.current_title ? info.current_title : '');
 
       const pct = info.tracks_total > 0
         ? Math.min(100, Math.round((info.tracks_done || 0) / info.tracks_total * 100))
         : (info.status === 'complete' ? 100 : 0);
-
-      const statusClass = info.status === 'complete' ? 'card-complete'
-        : info.status === 'failed' ? 'card-failed'
-        : info.status === 'pending' ? 'card-pending'
-        : 'card-running';
-      const statusLabel = info.status === 'complete' ? '✅ Done'
-        : info.status === 'failed' ? '❌ Failed'
-        : info.status === 'pending' ? '⏸ Queued'
-        : '⏳ Downloading...';
-
-      setClass(card.root, 'playlist-card ' + statusClass);
-      setText(card.expandIcon, hasTracks ? (cardExpanded ? '▼' : '▶') : '');
-      card.headerRow.style.cursor = hasTracks ? 'pointer' : '';
-      card.headerRow.title = hasTracks
-        ? (cardExpanded ? 'Hide tracks' : `Show ${tracks.length} tracks`) : '';
-      setText(card.name, info.name || linkId);
-      if (card.name.title !== linkId) card.name.title = linkId;
-      let sub = statusLabel + (info.current_title ? ' — ' + info.current_title : '');
-      if (hasTracks && !cardExpanded) sub += `  ·  ${tracks.length} tracks ▸`;
-      setText(card.subtitle, sub);
       setWidth(card.fill, pct);
-      setText(card.fill, pct > 10 ? pct + '%' : '');
       setText(card.count, `${info.tracks_done || 0}/${info.tracks_total || '?'}`);
 
-      // Build/attach the track list only once the card is expanded
-      if (hasTracks && cardExpanded) {
-        const listEl = getTrackListEl(p, linkId, info);
+      card.toggle.disabled = !hasTracks;
+      const label2 = info.name || 'playlist';
+      setAttr(card.toggle, 'aria-label', (info.expanded ? 'Hide' : 'Show') + ` tracks of ${label2}`);
+      setAttr(card.logBtn, 'aria-label', `Log for ${label2}`);
+      if (hasTracks && info.expanded) {
+        const listEl = getTrackList(p, linkId, info, card.tracksId);
         if (listEl.parentNode !== card.root) card.root.appendChild(listEl);
-        if (listEl.style.display !== 'block') listEl.style.display = 'block';
+        listEl.hidden = false;
       }
     }
   }
 }
 
-// ── Toggles (pure style changes — no rebuild) ──────────────────────────
-
 function toggleProvider(p) {
   const data = liveState.providers[p];
   if (!data) return;
   data.expanded = data.expanded === false;
-  const entry = domCache.providers[p];
-  if (entry) {
-    setText(entry.arrow, data.expanded ? '▼' : '▶');
-    entry.body.style.display = data.expanded ? '' : 'none';
-  }
-}
-
-function toggleTracks(provider, linkId) {
-  const p = liveState.providers[provider];
-  if (!p || !p.links[linkId]) return;
-  const info = p.links[linkId];
-  if (!(info.tracks || []).length) return;
-  info.expanded = info.expanded !== true;
-
-  const card = domCache.providers[provider] && domCache.providers[provider].cards[linkId];
-  if (!card) return;
-  setText(card.expandIcon, info.expanded ? '▼' : '▶');
-
-  if (info.expanded) {
-    // First expand builds the rows; afterwards it is a style toggle
-    const listEl = getTrackListEl(provider, linkId, info);
-    if (listEl.parentNode !== card.root) card.root.appendChild(listEl);
-    listEl.style.display = 'block';
-    // Sync any status changes that landed while the list was collapsed
-    if (info._dirty) info._dirty.clear();
-  } else {
-    const entry = trackListCache[provider + '|' + linkId];
-    if (entry && entry.el.parentNode) entry.el.style.display = 'none';
-  }
-  // Refresh the header text (the "N tracks" hint only shows when collapsed).
-  // Patching in place costs well under a millisecond.
   syncAccordion();
 }
-
-function handleCardClick(e) {
-  const card = e.currentTarget.closest && e.currentTarget.closest('.playlist-card');
-  if (card) toggleTracks(card.dataset.provider, card.dataset.link);
-}
-
-function togglePlaylistLog(provider, linkId) {
-  const p = liveState.providers[provider];
-  if (!p || !p.links[linkId]) return;
-  const info = p.links[linkId];
-  info.logsOpen = !info.logsOpen;
-
-  const card = domCache.providers[provider] && domCache.providers[provider].cards[linkId];
+function toggleTracks(provider, linkId) {
+  const info = liveState.providers[provider]?.links[linkId];
+  if (!info || !(info.tracks || []).length) return;
+  info.expanded = !info.expanded;
+  const card = domCache.providers[provider]?.cards[linkId];
   if (!card) return;
-  if (info.logsOpen) {
-    card.logPane.textContent = (info.logs || []).join('\n');
-    card.logPane.style.display = 'block';
-    card.logPane.scrollTop = card.logPane.scrollHeight;
+  setAttr(card.toggle, 'aria-expanded', String(info.expanded));
+  if (info.expanded) {
+    const listEl = getTrackList(provider, linkId, info, card.tracksId);
+    if (listEl.parentNode !== card.root) card.root.appendChild(listEl);
+    listEl.hidden = false;
+    if (info._dirty) { info._dirty.clear(); }
   } else {
-    card.logPane.style.display = 'none';
+    const entry = trackListCache[provider + '|' + linkId];
+    if (entry) entry.el.hidden = true;
+  }
+  syncAccordion();
+}
+function togglePlaylistLog(provider, linkId) {
+  const info = liveState.providers[provider]?.links[linkId];
+  const card = domCache.providers[provider]?.cards[linkId];
+  if (!info || !card) return;
+  info.logsOpen = !info.logsOpen;
+  setAttr(card.logBtn, 'aria-expanded', String(info.logsOpen));
+  card.logPane.hidden = !info.logsOpen;
+  if (info.logsOpen) {
+    card.logPane.textContent = (info.logs || []).join('\n') || 'No output yet.';
+    card.logPane.scrollTop = card.logPane.scrollHeight;
   }
 }
 
-// Fast HTML escape — the DOM-element approach allocated a node per call,
-// which was thousands of allocations per track-list build.
-const _ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-function escHtml(s) {
-  return String(s == null ? '' : s).replace(/[&<>"']/g, c => _ESC[c]);
+// One shared ticker drives every cooldown countdown, stopping itself after.
+let cooldownTicker = null;
+function startCooldownTicker() {
+  if (cooldownTicker) return;
+  cooldownTicker = setInterval(() => {
+    const any = Object.values(liveState.providers).some(p => (p.cooldownUntil || 0) > Date.now());
+    syncAccordion();
+    if (!any) { clearInterval(cooldownTicker); cooldownTicker = null; }
+  }, 1000);
 }
 
+// ── Library ─────────────────────────────────────────────────────────────
 
-// ── Load files ──
-async function loadFiles() {
-  const r = await fetch('/api/files');
-  const items = await r.json();
-  document.getElementById('file-list').innerHTML = items.length === 0 ? 'No downloads yet.' :
-    '<table><tr><th>Name</th><th>Tracks</th></tr>' +
-    items.map(i => `<tr>
-      <td>${i.is_dir ? `<a href="/playlist/${encodeURIComponent(i.path)}">📁 ${i.name}</a>` : `🎵 ${i.name} (${i.size_mb} MB)`}</td>
-      <td>${i.mp3_count || '-'}</td>
-    </tr>`).join('') +
-    '</table>';
+let libItems = [];
+let libraryStale = true;
+
+async function loadLibrary(force) {
+  if (!force && !libraryStale && libItems.length) { renderLibrary(); return; }
+  try {
+    const d = await api('/api/library');
+    libItems = d.items;
+    libraryStale = false;
+    setText($('lib-totals'), `${plural(d.items.length, 'playlist')} · ${d.total_files.toLocaleString()} tracks · ${fmtBytes(d.total_bytes)}`);
+  } catch (e) { toast(e.message, 'bad'); return; }
+  renderLibrary();
+  loadReportCount();
 }
 
-// ── Load history ──
+function renderLibrary() {
+  const root = $('file-list');
+  root.textContent = '';
+  const q = $('lib-search').value.trim().toLowerCase();
+  const items = q ? libItems.filter(i => (i.name || '').toLowerCase().includes(q) || (i.folder || '').toLowerCase().includes(q)) : libItems;
+  $('btn-reset-all').disabled = !libItems.some(i => i.key) || runState === 'running';
+  if (!items.length) {
+    root.appendChild(mk('p', 'empty', q ? 'No playlists match that search.' : 'Nothing downloaded yet.'));
+    return;
+  }
+  for (const it of items) root.appendChild(libraryRow(it));
+}
+$('lib-search').addEventListener('input', renderLibrary);
+
+function libraryRow(it) {
+  const row = mk('div', 'lib-row');
+  row.dataset.state = !it.key ? 'pending' : it.left ? 'partial' : 'complete';
+
+  if (it.cover) {
+    const img = mk('img', 'cover');
+    img.src = it.cover;
+    img.alt = '';
+    img.loading = 'lazy';
+    row.appendChild(img);
+  } else {
+    const ph = mk('div', 'cover');
+    ph.appendChild(it.provider ? brandMark(it.provider, 20) : icon('disc'));
+    row.appendChild(ph);
+  }
+
+  const main = mk('div', 'lib-main');
+  const name = mk(it.has_folder ? 'a' : 'span', 'lib-name', it.name || it.folder);
+  if (it.has_folder) name.href = '/playlist/' + encodeURIComponent(it.folder);
+  main.appendChild(name);
+  const meta = mk('div', 'lib-meta');
+  if (it.provider) meta.appendChild(mk('span', '', PROVIDER_BRANDS[it.provider]?.label || it.provider));
+  if (it.key) {
+    meta.appendChild(mk('span', 'num', `${it.done}/${it.total} done`));
+    if (it.pending) meta.appendChild(mk('span', 'left', `${it.pending} to do`));
+    if (it.failed) meta.appendChild(mk('span', 'bad', `${it.failed} failed`));
+    if (it.unavailable) meta.appendChild(mk('span', '', `${it.unavailable} unavailable`));
+  } else {
+    const nt = mk('span', '', 'Not tracked yet');
+    nt.title = 'Downloaded before progress records existed — it gets one the next time it runs';
+    meta.appendChild(nt);
+  }
+  meta.appendChild(mk('span', 'num', `${plural(it.files, 'file')} · ${fmtBytes(it.size_bytes)}`));
+  main.appendChild(meta);
+  row.appendChild(main);
+
+  const progress = mk('div', 'progress');
+  if (it.key && it.total) {
+    const bar = mk('div', 'bar');
+    const fill = mk('div', 'fill');
+    fill.style.width = Math.round(it.done / it.total * 100) + '%';
+    bar.appendChild(fill);
+    progress.appendChild(bar);
+  }
+  row.appendChild(progress);
+
+  const actions = mk('div', 'lib-actions');
+  if (it.key && it.url) {
+    const go = mk('button', 'btn btn-sm', it.left ? 'Resume' : 'Check for new');
+    go.type = 'button';
+    go.title = it.left ? `Download the ${it.left} track(s) still to do` : 'Re-check the playlist and fetch anything added since';
+    go.addEventListener('click', () => launchJob(it.url, [it.provider]));
+    actions.appendChild(go);
+    if (it.failed || it.unavailable) {
+      const retry = mk('button', 'btn btn-sm btn-ghost', 'Retry failed');
+      retry.type = 'button';
+      retry.title = 'Try the failed and unavailable tracks again';
+      retry.addEventListener('click', () => retryAndRun([it]));
+      actions.appendChild(retry);
+    }
+    const reset = mk('button', 'btn btn-sm btn-ghost-danger', 'Reset');
+    reset.type = 'button';
+    reset.addEventListener('click', () => resetProgress([{ provider: it.provider, key: it.key }], it.name));
+    actions.appendChild(reset);
+  }
+  row.appendChild(actions);
+  return row;
+}
+
+async function retryAndRun(items) {
+  try {
+    const r = await api('/api/state/retry', { method: 'POST', body: { targets: items.map(i => ({ provider: i.provider, key: i.key })) } });
+    toast(`Retrying ${plural(r.tracks, 'track')}.`);
+  } catch (e) { toast(e.status === 409 ? 'Wait for the current download to finish first.' : e.message, 'bad'); return; }
+  const byProvider = [...new Set(items.map(i => i.provider))];
+  launchJob(items.map(i => i.url).join('\n'), byProvider);
+}
+
+// Reset keeps the MP3s: each one is replaced only once its re-download has
+// completely finished, so a rate-limited run never leaves fewer files.
+async function resetProgress(targets, name) {
+  const ok = await confirmDialog({
+    title: targets ? `Reset “${name}”?` : 'Reset every playlist?',
+    body: 'The next run re-downloads every track and overwrites the existing MP3s. Files stay where they are until each replacement has fully downloaded.',
+    ok: 'Reset',
+  });
+  if (!ok) return;
+  try {
+    const r = await api('/api/state/reset', { method: 'POST', body: targets ? { targets } : {} });
+    toast(`Reset ${plural(r.reset, 'playlist')}. Run it again to re-download.`);
+  } catch (e) { toast(e.status === 409 ? 'Wait for the current download to finish first.' : e.message, 'bad'); }
+  loadLibrary(true);
+}
+$('btn-reset-all').addEventListener('click', () => resetProgress(null));
+
+// Failed tracks: what couldn't be downloaded, why, and where to look by hand.
+let reportOpen = false;
+async function loadReportCount() {
+  try {
+    const report = await api('/api/report/failed');
+    const n = report.reduce((s, r) => s + r.tracks.length, 0);
+    setText($('btn-report-label'), n ? `Failed tracks (${n})` : 'Failed tracks');
+    const badge = $('failed-count');
+    badge.hidden = !n;
+    setText(badge, String(n));
+    badge.setAttribute('aria-label', `${n} failed tracks`);
+    if (reportOpen) renderReport(report);
+  } catch (_) { /* non-essential */ }
+}
+$('btn-report').addEventListener('click', async () => {
+  reportOpen = !reportOpen;
+  setAttr($('btn-report'), 'aria-expanded', String(reportOpen));
+  $('failed-report').hidden = !reportOpen;
+  if (reportOpen) renderReport(await api('/api/report/failed'));
+});
+function searchLink(label, url) {
+  const a = mk('a', '', label);
+  a.href = url;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  return a;
+}
+function renderReport(report) {
+  const root = $('failed-report');
+  root.textContent = '';
+  const head = mk('div', 'report-head');
+  const total = report.reduce((s, r) => s + r.tracks.length, 0);
+  head.appendChild(mk('h2', '', total ? `${plural(total, 'track')} couldn’t be downloaded` : 'Nothing failed'));
+  const actions = mk('div', 'actions');
+  const txt = mk('a', 'btn btn-sm btn-ghost');
+  txt.href = '/api/report/failed.txt';
+  txt.target = '_blank';
+  txt.append(icon('file'), document.createTextNode('Open as text'));
+  actions.appendChild(txt);
+  head.appendChild(actions);
+  root.appendChild(head);
+  for (const g of report) {
+    const group = mk('div', 'report-group');
+    const h = mk('h3');
+    h.append(brandMark(g.provider, 15), document.createTextNode(g.name || g.url));
+    const retry = mk('button', 'btn btn-sm btn-ghost', 'Retry these');
+    retry.type = 'button';
+    retry.style.marginLeft = 'auto';
+    retry.addEventListener('click', () => retryAndRun([g]));
+    h.appendChild(retry);
+    group.appendChild(h);
+    for (const t of g.tracks) {
+      const row = mk('div', 'report-track');
+      row.appendChild(mk('span', 'num', String(t.index)));
+      row.appendChild(mk('span', '', [t.artists[0], t.title].filter(Boolean).join(' – ')));
+      const q = encodeURIComponent(t.query);
+      row.appendChild(searchLink('YouTube', 'https://www.youtube.com/results?search_query=' + q));
+      row.appendChild(searchLink('SoundCloud', 'https://soundcloud.com/search?q=' + q));
+      row.appendChild(mk('span', 'why', (t.status === 'unavailable' ? 'Unavailable: ' : '') + t.error));
+      group.appendChild(row);
+    }
+    root.appendChild(group);
+  }
+}
+
+// ── History ─────────────────────────────────────────────────────────────
+
 async function loadHistory() {
-  const r = await fetch('/api/jobs');
-  const jobs = await r.json();
-  document.getElementById('history-list').innerHTML = jobs.length === 0 ? 'No runs yet.' :
-    '<table><tr><th>Time</th><th>Status</th><th>Links</th><th>Exit</th></tr>' +
-    jobs.map(j => `<tr>
-      <td>${new Date(j.created_at*1000).toLocaleString()}</td>
-      <td class="status-${j.status}">${j.status}</td>
-      <td>${j.links ? j.links.length : '?'} links</td>
-      <td>${j.exit_code ?? '-'}</td>
-    </tr>`).join('') +
-    '</table>';
+  let jobs;
+  try { jobs = await api('/api/jobs'); } catch (e) { toast(e.message, 'bad'); return; }
+  const root = $('history-list');
+  root.textContent = '';
+  if (!jobs.length) { root.appendChild(mk('p', 'empty', 'No runs yet.')); return; }
+  const table = mk('table', 'table');
+  const thead = mk('thead');
+  const hr = mk('tr');
+  for (const h of ['Started', 'Result', 'Playlists', 'Tracks', 'Speed', 'Took']) hr.appendChild(mk('th', '', h));
+  thead.appendChild(hr);
+  table.appendChild(thead);
+  const tbody = mk('tbody');
+  for (const j of jobs) {
+    const tr = mk('tr');
+    tr.appendChild(mk('td', 'num', new Date(j.created_at * 1000).toLocaleString()));
+    const st = mk('td');
+    st.appendChild(mk('span', 'status-chip ' + j.status, STATUS_LABEL[j.status] || j.status));
+    tr.appendChild(st);
+    tr.appendChild(mk('td', 'num', String((j.links || []).length)));
+    const tracks = j.total
+      ? `${j.done}/${j.total}` + (j.failed ? ` · ${j.failed} failed` : '') + (j.pending ? ` · ${j.pending} left` : '')
+      : '—';
+    tr.appendChild(mk('td', 'num', tracks));
+    tr.appendChild(mk('td', '', j.speed || (j.parallel ? 'parallel' : 'sequential')));
+    const took = j.finished_at ? j.finished_at - (j.started_at || j.created_at) : null;
+    tr.appendChild(mk('td', 'num', fmtDuration(took)));
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  root.appendChild(table);
 }
 
-// ── Init ──
-loadLinks();
-loadFiles();
-loadHistory();
-setInterval(async () => {
-  const r = await fetch('/api/status');
-  const s = await r.json();
-  if (s.running) {
-    document.getElementById('status-indicator').textContent = '● Running';
-    document.getElementById('status-indicator').className = 'status-running';
-    document.getElementById('btn-start').disabled = true;
-    document.getElementById('btn-cancel').disabled = false;
-  } else if (!document.getElementById('btn-start').disabled) {
-    document.getElementById('btn-cancel').disabled = true;
+// ── System ──────────────────────────────────────────────────────────────
+
+async function loadSystem(check) {
+  let v;
+  try { v = await api('/api/system' + (check ? '?check=1' : '')); } catch (e) { toast(e.message, 'bad'); return; }
+  const dl = $('sys-facts');
+  dl.textContent = '';
+  const fact = (k, val) => { dl.appendChild(mk('dt', '', k)); dl.appendChild(mk('dd', 'num', val)); };
+  let yt = v.yt_dlp || '—';
+  if (v.restart_required) yt += ` (running ${v.yt_dlp_loaded} until the app restarts)`;
+  if (v.yt_dlp_latest) yt += v.yt_dlp_latest === v.yt_dlp ? ' — up to date' : ` — ${v.yt_dlp_latest} available`;
+  fact('yt-dlp', yt);
+  fact('spotdl', v.spotdl ? `${v.spotdl} (its yt-dlp: ${v.spotdl_yt_dlp || '—'})` : (v.spotdl_found ? 'found' : 'not installed'));
+  fact('deno', v.deno || 'not found');
+  fact('ffmpeg', v.ffmpeg ? 'found' : 'not found');
+  fact('Python', v.python);
+  renderNotifyButton();
+}
+$('btn-check-update').addEventListener('click', () => loadSystem(true));
+$('btn-update-ytdlp').addEventListener('click', async () => {
+  const out = $('update-result');
+  out.className = 'result';
+  setText(out, 'Updating… this can take a minute.');
+  $('btn-update-ytdlp').disabled = true;
+  try {
+    const r = await api('/api/system/update-ytdlp', { method: 'POST' });
+    out.className = 'result ' + (r.ok ? 'ok' : 'bad');
+    setText(out, r.ok
+      ? (r.before === r.after ? `Already on the latest (${r.after}).` : `Updated ${r.before} → ${r.after}. Restart the app to use it.`)
+      : 'Update failed: ' + r.error);
+  } catch (e) {
+    out.className = 'result bad';
+    setText(out, e.status === 409 ? 'Wait for the current download to finish first.' : e.message);
   }
-}, 3000);
+  $('btn-update-ytdlp').disabled = false;
+  loadSystem();
+});
+$('btn-cleanup').addEventListener('click', async () => {
+  try {
+    const r = await api('/api/system/cleanup', { method: 'POST' });
+    const out = $('cleanup-result');
+    out.className = 'result ok';
+    setText(out, r.removed ? `Removed ${plural(r.removed, 'file')}, freed ${fmtBytes(r.freed_bytes)}.` : 'Nothing to clean up.');
+  } catch (e) { toast(e.message, 'bad'); }
+});
+function renderNotifyButton() {
+  const btn = $('btn-notify-permission');
+  if (!('Notification' in window)) { btn.disabled = true; setText(btn.lastChild, 'Not supported in this browser'); return; }
+  const p = Notification.permission;
+  btn.disabled = p !== 'default';
+  setText(btn.lastChild, p === 'granted' ? 'Browser notifications on' : p === 'denied' ? 'Blocked in browser settings' : 'Allow browser notifications');
+  $('btn-test-notify').disabled = !(lastStatus && lastStatus.notify_configured);
+}
+$('btn-notify-permission').addEventListener('click', async () => {
+  try { await Notification.requestPermission(); } catch (_) { /* ignore */ }
+  renderNotifyButton();
+});
+$('btn-test-notify').addEventListener('click', async () => {
+  const out = $('notify-result');
+  try {
+    const r = await api('/api/system/test-notification', { method: 'POST' });
+    out.className = 'result ' + (r.sent ? 'ok' : 'bad');
+    setText(out, r.sent ? 'Sent.' : 'Couldn’t reach NOTIFY_URL — check the server log.');
+  } catch (e) { out.className = 'result bad'; setText(out, e.message); }
+});
+
+// ── Start ───────────────────────────────────────────────────────────────
+
+loadLinks();
+selectTab(START_TAB || 'links');
+pollStatus();
+loadReportCount();
+setInterval(pollStatus, 3000);
 </script>
 </body>
 </html>

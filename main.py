@@ -7,6 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from src.coordinator import Coordinator
+from src.settings import DEFAULT_SPEED, SPEEDS
 from src.utils import get_spotify_creds, setup_logging
 
 
@@ -31,16 +32,20 @@ def parse_args() -> argparse.Namespace:
         help="Override output directory (alternative to positional arg)"
     )
     parser.add_argument(
-        "-p", "--parallel",
-        action="store_true",
-        help="Run providers and their links concurrently. Without it the whole "
-             "run is sequential — one provider, one playlist and one track at "
-             "a time, which is what keeps SoundCloud under its per-IP rate limit"
+        "-s", "--speed", choices=SPEEDS, default=None,
+        help="careful: one track at a time per provider, slow and safe. "
+             "balanced (default): several workers per provider under an adaptive "
+             "rate limit that backs off the moment SoundCloud/YouTube push back. "
+             "fast: more workers and a higher starting rate"
     )
     parser.add_argument(
-        "--max-workers",
-        type=int, default=4,
-        help="Max parallel downloads when --parallel is set (default: 4)"
+        "-p", "--parallel", action="store_true",
+        help="Kept for old scripts — same as --speed balanced"
+    )
+    parser.add_argument(
+        "--max-workers", type=int, default=None,
+        help="Override how many tracks (SoundCloud/YouTube) or playlists (Spotify) "
+             "each provider works on at once"
     )
     parser.add_argument(
         "--providers",
@@ -60,6 +65,8 @@ def parse_args() -> argparse.Namespace:
         parsed.input = parsed.input_file_override
     if parsed.output_dir_override:
         parsed.output = parsed.output_dir_override
+    if parsed.speed is None:
+        parsed.speed = DEFAULT_SPEED
 
     return parsed
 
@@ -75,16 +82,14 @@ def main() -> None:
         logger.error(f"❌ Input file not found: {args.input}")
         sys.exit(1)
 
-    try:
-        client_id, client_secret = get_spotify_creds(logger)
-    except ValueError:
-        sys.exit(1)
-
     providers = ["soundcloud", "youtube", "spotify"] if "all" in args.providers else args.providers
+
+    # Optional: spotdl reads Spotify without them. Passed through when set.
+    client_id, client_secret = get_spotify_creds(logger)
 
     coord = Coordinator(
         args.output, logger, client_id, client_secret,
-        parallel=args.parallel, max_workers=args.max_workers,
+        speed=args.speed, max_workers=args.max_workers,
         use_tui=args.tui,
     )
     exit_code = coord.process_all(args.input, providers)

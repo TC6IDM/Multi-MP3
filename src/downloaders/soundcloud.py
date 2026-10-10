@@ -1,29 +1,29 @@
-import hashlib
+import json
+import logging
 import os
 import re
 import time
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple
-from urllib.parse import urlparse
+from typing import Any
 
-from src.downloaders.base import BaseDownloader
-from src.models import Song
+import yt_dlp
+
+from src.downloaders.ytdlp_engine import EngineProfile, YtDlpEngine
+from src.ratelimit import AdaptiveRateLimiter
+from src.settings import Lane, env_int
 
 
-class SoundCloudDownloader(BaseDownloader):
-    # How many times a partially-failed playlist is resumed before giving up,
-    # and how long to wait before each resume. The waits are long on purpose:
-    # a partial failure here almost always means the IP hit SoundCloud's rate
-    # limit, and that only clears with time — retrying immediately just burns
-    # the next attempt too.
-    DEFAULT_MAX_ATTEMPTS = 3
-    DEFAULT_BACKOFF = (60, 300, 900)
+class SoundCloudDownloader:
+    """SoundCloud through the in-process yt-dlp engine.
 
-    # A run that dies before its first track is a different failure: nothing
-    # was rate-limited, the tool simply never got going (usually the client_id
-    # lookup timing out). Waiting minutes for that helps nobody.
-    STARTUP_BACKOFF = (10, 30, 60)
+    This used to shell out to scdl once per playlist. scdl is itself a yt-dlp
+    wrapper, so the engine reproduces its options exactly (format choice, album
+    tags from the playlist, the `%(playlist)s/NNNN uploader - title` layout)
+    while adding what scdl couldn't: one request budget shared across every
+    playlist in the run, and an exact per-track record.
+    """
 
     # Where SoundCloud's web player hides the anonymous API key: the homepage
     # links a handful of JS bundles, one of which declares client_id:"...".
@@ -36,206 +36,121 @@ class SoundCloudDownloader(BaseDownloader):
     # to a dead run, so the cache is refreshed daily rather than held forever.
     CLIENT_ID_TTL = 24 * 3600
 
-    def _archive_path(self, link: str) -> Path:
-        """Where the download archive for one playlist lives.
+    OUTTMPL = "%(playlist)s/%(playlist_index)04d %(uploader)s - %(title)s.%(ext)s"
 
-        Keyed on the URL path only, so a private link's ?secret_token= doesn't
-        strand the playlist with a second archive. The hash disambiguates
-        paths that collide once slugified.
-        """
-        path = urlparse(link).path.strip("/").lower()
-        slug = re.sub(r"[^a-z0-9]+", "-", path).strip("-") or "playlist"
-        digest = hashlib.sha1(path.encode("utf-8")).hexdigest()[:8]
-        return self.output_dir / ".archive" / f"{slug[:60]}-{digest}.txt"
+    def __init__(self, output_dir: Path, logger: logging.Logger) -> None:
+        self.output_dir = output_dir
+        self.logger = logger
 
-    @staticmethod
-    def _archive_count(archive: Path) -> int:
-        """How many tracks the archive has recorded as done."""
-        try:
-            return sum(1 for line in archive.read_text(encoding="utf-8").splitlines()
-                       if line.strip())
-        except OSError:
-            return 0
-
-    def download(self, link: str,
-                 on_progress: Callable[[str, Dict[str, Any]], None] | None = None
-                 ) -> Tuple[int, Path]:
-        """Download SoundCloud link via scdl CLI, resuming if it fails partway."""
-        # SoundCloud rate-limits by IP. Once tripped it rejects the cached
-        # client_id AND blocks the request yt-dlp makes to refresh it, so every
-        # remaining track fails with 403 — a 460-track playlist died at ~102.
-        # Pacing requests and backing off on extractor errors keeps runs under
-        # the limit; the sleep is per track, so long playlists take longer but
-        # actually finish.
-        #
-        # Within a playlist everything is deliberately serial — one request in
-        # flight at a time. scdl walks the playlist through a single yt-dlp
-        # session, so tracks are already sequential; --concurrent-fragments 1
-        # keeps a single track from fanning out into parallel HLS range
-        # requests, and --sleep-requests spaces out the metadata calls that
-        # actually carry the rate limit. Turning off --parallel serialises the
-        # layer above this (providers and playlists).
-        yt_dlp_args = (
-            "--write-info-json --ignore-errors --no-abort-on-error --yes-playlist "
-            "--embed-thumbnail --audio-quality 1 "
-            "--concurrent-fragments 1 --sleep-requests 1 "
-            "--sleep-interval 1 --max-sleep-interval 4 "
-            "--retries 5 --extractor-retries 5 --retry-sleep exp=2:60"
-        )
-
-        # The download archive is what makes resuming cheap. Without it a
-        # resumed run still calls the /tracks/<id> API for every track it
-        # already has, just to work out the filename and discover it exists —
-        # 102 wasted requests against the very limit that killed the run.
-        # yt-dlp checks the archive against the playlist entry (which already
-        # carries the track id from the single playlist call), so archived
-        # tracks cost no requests at all. Only successfully downloaded tracks
-        # are recorded, so failures are always retried.
-        archive = self._archive_path(link)
-        archive.parent.mkdir(parents=True, exist_ok=True)
-
-        cmd = [
-            "scdl",
-            "-l", link,
-            "--path", str(self.output_dir.resolve()),
-            "--download-archive", str(archive),
-            # scdl already creates a directory named after the playlist under
-            # --path, so a leading %(playlist)s/ here nested it twice:
-            #   downloads/<playlist>/<playlist>/0001 ....mp3
-            # which also hid the files from the cleanup/missing-track scan.
-            "--playlist-name-format", "%(playlist_index)04d %(uploader)s - %(title)s.%(ext)s",
-            "--onlymp3",
-            "--original-art",
-            "-c",
-            "--yt-dlp-args", yt_dlp_args,
+    def profile(self, lane: Lane, limiter: AdaptiveRateLimiter) -> EngineProfile:
+        args = [
+            # SoundCloud has been retiring its mp3 transcodings. scdl's
+            # --onlymp3 failed outright on tracks without one; prefer mp3 (no
+            # re-encode) and fall back to the AAC stream, converted below.
+            "-f", "ba[format_id*=mp3]/ba",
+            "--extractor-args", "soundcloud:formats=*_aac,*_mp3",
+            "-x", "--audio-format", "mp3", "--audio-quality", "1",
+            "--embed-metadata", "--embed-thumbnail",
+            "--parse-metadata", "%(playlist)s:%(meta_album)s",
+            "--parse-metadata", "%(playlist_uploader)s:%(meta_album_artist)s",
+            "--parse-metadata", "%(playlist_index)s:%(meta_track)s",
+            "--trim-filenames", "240",
+            # One request in flight per track; the limiter spaces the tracks.
+            "--concurrent-fragments", "1",
+            "--retries", "5",
+            # yt-dlp's own 429 retries would keep knocking on a closed door;
+            # the shared limiter handles rate limits for every worker at once.
+            "--extractor-retries", "0",
         ]
-
-        # An authenticated session gets far higher rate limits. Optional —
-        # without it we simply rely on the pacing above.
+        # An authenticated session gets far higher rate limits. Optional.
         auth_token = os.getenv("SOUNDCLOUD_AUTH_TOKEN", "").strip()
         if auth_token:
-            cmd += ["--auth-token", auth_token]
+            args += ["--username", "oauth", "--password", auth_token]
             self.logger.info("🔑 Using SoundCloud auth token")
 
-        return self._download_with_resume(link, cmd, archive, on_progress)
+        return EngineProfile(
+            provider="soundcloud", label="SoundCloud", ydl_args=args, outtmpl=self.OUTTMPL,
+            workers=lane.workers, limiter=limiter,
+            max_attempts=env_int("SOUNDCLOUD_MAX_ATTEMPTS", 3),
+            forbidden_is_rate_limit=True, legacy_archive=True, tags_from_playlist=True,
+            before_run=self._seed_client_id, refresh_auth=self._refresh_client_id,
+            backfill=self._backfill_titles,
+        )
 
-    def _download_with_resume(self, link: str, base_cmd: List[str], archive: Path,
-                              on_progress: Callable[[str, Dict[str, Any]], None] | None,
-                              ) -> Tuple[int, Path]:
-        """Run scdl, re-running it from where it stopped if tracks failed.
+    # ── Engine hooks ─────────────────────────────────────────────────
 
-        A rate-limited run doesn't crash — it exits 0 having failed every track
-        after the wall was hit. So the decision to resume is driven by the
-        per-item error count the output parser collects, not the return code.
+    def _store_client_id(self, engine: YtDlpEngine, client_id: str) -> None:
+        """Hand yt-dlp our client id through its own cache, which is where its
+        SoundCloud extractor looks before scraping soundcloud.com itself."""
+        with yt_dlp.YoutubeDL({"cachedir": str(engine.cachedir), "quiet": True}) as ydl:
+            ydl.cache.store("soundcloud", "client_id", client_id)
 
-        A run that never reached a track is retried too, on a much shorter
-        clock: that failure mode is scdl's startup, not the rate limit.
+    def _seed_client_id(self, engine: YtDlpEngine) -> None:
+        client_id = self._client_id()
+        if client_id:
+            self._store_client_id(engine, client_id)
+
+    def _refresh_client_id(self, engine: YtDlpEngine) -> bool:
+        client_id = self._client_id(refresh=True)
+        if client_id:
+            self._store_client_id(engine, client_id)
+        return bool(client_id)
+
+    def _backfill_titles(self, engine: YtDlpEngine, tracks: list[dict[str, Any]]) -> None:
+        """Fill in titles the playlist call didn't return.
+
+        SoundCloud only sends full data for the first few tracks of a set; the
+        rest arrive as bare ids, which would leave the track list reading
+        "Track 6, Track 7, …" until each one downloads. A batched /tracks?ids=
+        lookup fixes that for ~1 request per 50 tracks, and only on a
+        playlist's first run — titles are kept in its record after that.
         """
-        max_attempts = self._env_int("SOUNDCLOUD_MAX_ATTEMPTS", self.DEFAULT_MAX_ATTEMPTS)
-        backoff = self._env_backoff()
+        missing = [t for t in tracks if not t.get("title") and str(t.get("id") or "").isdigit()]
+        if not missing:
+            return
+        client_id = self._client_id()
+        if not client_id:
+            return
+        for start in range(0, len(missing), 50):
+            if engine.cancel.is_set():
+                return
+            chunk = missing[start:start + 50]
+            url = ("https://api-v2.soundcloud.com/tracks?ids="
+                   + ",".join(str(t["id"]) for t in chunk) + f"&client_id={client_id}")
+            try:
+                data = json.loads(self._http_get(url, 30))
+            except Exception as e:
+                # Best effort: titles also arrive as each track downloads. A
+                # 429 here is still news the limiter needs, though.
+                if "429" in str(e):
+                    engine.p.limiter.on_rate_limited(reason=str(e))
+                self.logger.debug(f"SoundCloud title lookup stopped: {e}")
+                return
+            by_id = {str(d.get("id")): d for d in data if isinstance(d, dict)} if isinstance(data, list) else {}
+            for t in chunk:
+                d = by_id.get(str(t["id"]))
+                if not d:
+                    continue
+                t["title"] = d.get("title") or t.get("title") or ""
+                user = (d.get("user") or {}).get("username")
+                if user:
+                    t["artists"] = [user]
+            time.sleep(1)   # a short burst at most — this isn't on the limiter's clock
 
-        def say(msg: str) -> None:
-            # Route to the owning playlist's log pane when there is one, so a
-            # long wait doesn't look like the run has silently frozen.
-            if on_progress:
-                on_progress("log", {"line": msg})
-            self.logger.info(msg)
-
-        code, errors_file = 1, self.errors_dir / "errors-scdl-unstarted.txt"
-        refresh_client_id = False
-
-        for attempt in range(1, max_attempts + 1):
-            before = self._archive_count(archive)
-            # Nothing to announce as a resume when the last attempt never got
-            # going — refresh_client_id is exactly that case, and it already
-            # logged why it is going round again.
-            if attempt > 1 and not refresh_client_id:
-                # Reported as a count, not a position: a rate limit usually
-                # kills a contiguous tail, but a scattered failure would make
-                # "resuming from track N" a lie.
-                say(f"▶️ Resuming — {before} track(s) already done, skipping those "
-                    f"(attempt {attempt}/{max_attempts})")
-
-            cmd = list(base_cmd)
-            client_id = self._client_id(refresh=refresh_client_id, say=say)
-            if client_id:
-                cmd += ["--client-id", client_id]
-
-            stats: Dict[str, Any] = {}
-            code, errors_file = self._download(
-                "scdl", link, cmd, on_progress=on_progress, stats_out=stats)
-
-            after = self._archive_count(archive)
-            failed = int(stats.get("errors", 0) or 0)
-            gained = after - before
-            # Did scdl get as far as the playlist at all? Any of these means
-            # yes; none of them with a non-zero exit means it died on startup.
-            # A re-run of a finished playlist reaches only the archive skips,
-            # so those count as having started too.
-            started = (bool(stats.get("total")) or gained > 0 or failed > 0
-                       or bool(stats.get("archived")))
-
-            if not failed:
-                if started or code == 0:
-                    if attempt > 1:
-                        say(f"✅ Resume complete — {after} track(s) downloaded in total")
-                    return code, errors_file
-
-                # Nothing downloaded, nothing even attempted. scdl derives an
-                # API client_id at startup by pulling soundcloud.com under a
-                # fixed 30s timeout, and a slow response there kills the whole
-                # run before track one (curl error 28). Drop the cached id and
-                # try again shortly — this clears on its own, unlike a limit.
-                if attempt >= max_attempts:
-                    say(f"❌ scdl exited {code} without starting the playlist after "
-                        f"{attempt} attempt(s). Check the link is reachable, or set "
-                        f"SOUNDCLOUD_CLIENT_ID to skip the lookup.")
-                    break
-                refresh_client_id = True
-                wait = self.STARTUP_BACKOFF[min(attempt - 1, len(self.STARTUP_BACKOFF) - 1)]
-                say(f"⚠️ scdl exited {code} before downloading anything — retrying in "
-                    f"{wait}s with a freshly fetched client id.")
-                self._sleep(wait)
-                continue
-
-            refresh_client_id = False
-
-            if attempt >= max_attempts:
-                say(f"⚠️ {failed} track(s) still failing after {attempt} attempt(s); "
-                    f"{after} downloaded. Re-run this link later — it will skip "
-                    f"those and retry the rest.")
-                break
-
-            # Two attempts in a row that download nothing new mean waiting
-            # longer isn't helping — the tracks are gone, or the limit is far
-            # from clearing. Either way, stop burning attempts.
-            if gained == 0 and attempt > 1:
-                say(f"⏹️ Resume made no progress twice in a row; stopping at "
-                    f"{after} track(s).")
-                break
-
-            wait = backoff[min(attempt - 1, len(backoff) - 1)]
-            say(f"⏳ {failed} track(s) failed after {gained} new this pass — "
-                f"waiting {wait}s for the rate limit to clear, then resuming.")
-            self._sleep(wait)
-
-        return code, errors_file
+    # ── client_id ────────────────────────────────────────────────────
 
     def _client_id(self, refresh: bool = False,
                    say: Callable[[str], None] | None = None) -> str:
-        """A SoundCloud API client_id for scdl, or "" to let scdl find its own.
+        """A SoundCloud API client_id, or "" to let yt-dlp find its own.
 
-        scdl derives one at startup by downloading soundcloud.com plus its JS
-        bundles, all under curl's fixed 30s timeout. That homepage is heavy, so
-        on a slow or congested link the request dies mid-body ("curl: (28)
-        Operation timed out ... with 557020 bytes received") and takes the
-        whole playlist with it — before a single track.
+        The id is scraped from soundcloud.com plus its JS bundles. That homepage
+        is heavy, and under scdl's fixed 30s curl timeout a slow response died
+        mid-body ("curl: (28) Operation timed out ... with 557020 bytes
+        received"), taking the whole playlist with it before a single track.
 
         Doing the lookup here fixes both halves of that: our own timeout is
         generous and configurable, and the answer is cached on disk, so the
-        usual run hands scdl a ready client_id and never touches soundcloud.com
-        at startup at all. If we can't get one either, we return "" and scdl
-        behaves exactly as it does today.
+        usual run never touches soundcloud.com at startup at all.
         """
         env_id = os.getenv("SOUNDCLOUD_CLIENT_ID", "").strip()
         if env_id:
@@ -243,9 +158,7 @@ class SoundCloudDownloader(BaseDownloader):
 
         cache = self.output_dir / ".cache" / "soundcloud-client-id.txt"
         if refresh:
-            # The cached id is the prime suspect when a run dies on startup:
-            # scdl falls back to generating one when it's rejected, which is
-            # the very lookup that just timed out.
+            # The cached id is the prime suspect after a 403.
             cache.unlink(missing_ok=True)
         else:
             try:
@@ -258,7 +171,7 @@ class SoundCloudDownloader(BaseDownloader):
 
         client_id = self._generate_client_id()
         if not client_id:
-            msg = ("⚠️ Could not pre-fetch a SoundCloud client id; letting scdl "
+            msg = ("⚠️ Could not pre-fetch a SoundCloud client id; letting yt-dlp "
                    "try its own lookup.")
             (say or self.logger.warning)(msg)
             return ""
@@ -273,7 +186,7 @@ class SoundCloudDownloader(BaseDownloader):
 
     def _generate_client_id(self) -> str:
         """Scrape a client_id out of the web player's JS bundles."""
-        timeout = self._env_int("SOUNDCLOUD_CLIENT_ID_TIMEOUT", 90)
+        timeout = env_int("SOUNDCLOUD_CLIENT_ID_TIMEOUT", 90)
         try:
             home = self._http_get("https://soundcloud.com", timeout)
         except Exception as e:
@@ -295,10 +208,11 @@ class SoundCloudDownloader(BaseDownloader):
     def _http_get(self, url: str, timeout: int) -> str:
         """Fetch a page as a browser would, with our own timeout.
 
-        Prefers curl_cffi (scdl's own HTTP stack) because SoundCloud serves a
-        different, TLS-fingerprinted response to plain Python clients; falls
-        back to urllib where it isn't installed.
+        Prefers curl_cffi because SoundCloud serves a different, TLS-
+        fingerprinted response to plain Python clients; falls back to urllib
+        where it isn't installed.
         """
+        curl_requests: Any
         try:
             from curl_cffi import requests as curl_requests
         except ImportError:
@@ -307,7 +221,7 @@ class SoundCloudDownloader(BaseDownloader):
         if curl_requests is not None:
             r = curl_requests.get(url, timeout=timeout, impersonate="chrome")
             r.raise_for_status()
-            return r.text
+            return str(r.text)
 
         req = urllib.request.Request(url, headers={
             "User-Agent": self._BROWSER_UA,
@@ -315,44 +229,4 @@ class SoundCloudDownloader(BaseDownloader):
             "Accept-Language": "en-US,en;q=0.9",
         })
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read().decode("utf-8", "replace")
-
-    @staticmethod
-    def _sleep(seconds: int) -> None:
-        """Sleep in slices so a Ctrl-C during a long backoff still lands."""
-        deadline = time.monotonic() + seconds
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return
-            time.sleep(min(5.0, remaining))
-
-    @staticmethod
-    def _env_int(name: str, default: int) -> int:
-        try:
-            return max(1, int(os.getenv(name, "").strip() or default))
-        except ValueError:
-            return default
-
-    def _env_backoff(self) -> Tuple[int, ...]:
-        raw = os.getenv("SOUNDCLOUD_RETRY_BACKOFF", "").strip()
-        if not raw:
-            return self.DEFAULT_BACKOFF
-        try:
-            waits = tuple(max(0, int(p)) for p in raw.split(",") if p.strip())
-        except ValueError:
-            self.logger.warning(
-                f"Ignoring invalid SOUNDCLOUD_RETRY_BACKOFF={raw!r}")
-            return self.DEFAULT_BACKOFF
-        return waits or self.DEFAULT_BACKOFF
-
-    def cleanup(self, playlist_name: str) -> List[Song]:
-        """Cleanup metadata and scan for missing tracks across all playlists."""
-        # Delete root-level .info.json files that scdl sometimes leaves
-        for infofile in self.output_dir.glob("*.info.json"):
-            self.logger.info(f"🗑️ Deleting root {infofile.name}")
-            infofile.unlink(missing_ok=True)
-        return self._cleanup_all_playlists()
-
-    def fetch_metadata_image(self, url: str) -> str | None:
-        return "scdl-playlist"
+            return str(resp.read().decode("utf-8", "replace"))

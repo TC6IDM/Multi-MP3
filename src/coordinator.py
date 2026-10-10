@@ -1,175 +1,258 @@
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
-from pathlib import Path
-import json
 import logging
 import threading
-from typing import Any, Dict, List
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import Any
 
-from src.downloaders.base import BaseDownloader
-from src.utils import read_links
-from src.downloaders.spotify import SpotifyDownloader
+from src.dedupe import DoneIndex, copy_track, renumber
 from src.downloaders.soundcloud import SoundCloudDownloader
+from src.downloaders.spotify import SpotifyDownloader, link_kind
 from src.downloaders.youtube import YouTubeDownloader
+from src.downloaders.ytdlp_engine import YtDlpEngine
+from src.models import CODE_CANCELLED, CODE_FAILED, CODE_OK, CODE_PARTIAL, LinkResult
+from src.ratelimit import AdaptiveRateLimiter
+from src.settings import DEFAULT_SPEED, env_rate_override, lane
+from src.state import DONE, FAILED, UNAVAILABLE, PlaylistState, StateStore
 from src.tui import DownloadProgress
+from src.utils import read_links
 
-
-@dataclass
-class LinkResult:
-    """Result of a single link download (before cleanup)."""
-    provider: str
-    link: str
-    playlist_name: str
-    code: int
-    index: int = 0
-    total: int = 0
+ENGINE_PROVIDERS = ("soundcloud", "youtube")
 
 
 class Coordinator:
-    """Orchestrates downloading across Spotify, YouTube, and SoundCloud."""
+    """Orchestrates downloading across Spotify, YouTube, and SoundCloud.
+
+    Every provider runs in its own lane, all at the same time. They hit
+    different services, so there's no reason for one to wait on another — the
+    old single "parallel" switch made SoundCloud's rate limit everyone's
+    problem. Each lane sets its own pace: SoundCloud and YouTube through a
+    shared adaptive rate limiter, Spotify through spotdl's thread count.
+    """
 
     def __init__(self, output_dir: Path, logger: logging.Logger,
-                 spotify_client_id: str, spotify_client_secret: str,
-                 parallel: bool = False, max_workers: int = 4,
+                 spotify_client_id: str = "", spotify_client_secret: str = "",
+                 speed: str = DEFAULT_SPEED, max_workers: int | None = None,
                  use_tui: bool = False,
-                 progress: DownloadProgress | None = None):
+                 progress: DownloadProgress | None = None,
+                 cancel_event: threading.Event | None = None):
         self.output_dir = output_dir.resolve()
         self.logger = logger
         self.spotify_client_id = spotify_client_id
         self.spotify_client_secret = spotify_client_secret
-        self.parallel = parallel
+        self.speed = speed
         self.max_workers = max_workers
         self.tui = progress or DownloadProgress(enabled=use_tui)
-        self._downloaders: Dict[str, BaseDownloader] = {}
-        self._downloader_lock = threading.Lock()
+        self.cancel = cancel_event or threading.Event()
+        self.store = StateStore(self.output_dir)
+        # Every track already downloaded anywhere, so a song that's in several
+        # playlists is fetched once and copied into the rest.
+        self.done_index = DoneIndex(self.store)
+        self._spotify: SpotifyDownloader | None = None
+        self._spotify_lock = threading.Lock()
 
-    def _build_downloader(self, provider: str) -> BaseDownloader:
-        if provider == "spotify":
-            return SpotifyDownloader(self.output_dir, self.logger,
-                                     self.spotify_client_id, self.spotify_client_secret)
-        elif provider == "soundcloud":
-            return SoundCloudDownloader(self.output_dir, self.logger)
-        elif provider == "youtube":
-            return YouTubeDownloader(self.output_dir, self.logger)
-        else:
-            raise ValueError(f"Unsupported provider: {provider}")
+    def _get_spotify(self) -> SpotifyDownloader:
+        with self._spotify_lock:
+            if self._spotify is None:
+                self._spotify = SpotifyDownloader(self.output_dir, self.logger,
+                                                  self.spotify_client_id, self.spotify_client_secret)
+                self._spotify.cancel = self.cancel
+                self._spotify.threads = lane("spotify", self.speed).threads or 6
+            return self._spotify
 
-    def _get_downloader(self, provider: str) -> BaseDownloader:
-        """Return the cached downloader for a provider, creating it once.
+    # ── SoundCloud / YouTube ─────────────────────────────────────────
 
-        Rebuilding SpotifyDownloader per link re-created SpotifyClientCredentials
-        every time, which re-runs the client-credentials token exchange.
+    def _limiter(self, provider: str) -> AdaptiveRateLimiter:
+        cfg = lane(provider, self.speed, self.max_workers)
+        return AdaptiveRateLimiter(
+            provider, rate=cfg.rate, min_rate=cfg.min_rate, max_rate=cfg.max_rate,
+            state_file=self.output_dir / ".cache" / f"ratelimit-{provider}.json",
+            # An explicitly configured rate beats the one learned last run.
+            use_learned=env_rate_override(provider) is None,
+            on_event=lambda kind, data: self.tui.provider_status(provider, kind, data),
+        )
+
+    def _run_engine_lane(self, provider: str, links: list[str]) -> list[LinkResult]:
+        cfg = lane(provider, self.speed, self.max_workers)
+        limiter = self._limiter(provider)
+        downloader = (SoundCloudDownloader(self.output_dir, self.logger) if provider == "soundcloud"
+                      else YouTubeDownloader(self.output_dir, self.logger))
+        profile = downloader.profile(cfg, limiter)
+        self.logger.info(f"🎯 {provider}: {len(links)} playlist(s) · {cfg.workers} workers · "
+                         f"starting at {limiter.rate:.0f} tracks/min (max {cfg.max_rate:.0f})")
+        self.tui.provider_status(provider, "rate", {"rate": round(limiter.rate, 1),
+                                                    "workers": cfg.workers})
+        engine = YtDlpEngine(profile, self.output_dir, self.logger, self.store, self.tui, self.cancel,
+                             done_index=self.done_index)
+        return engine.run(links)
+
+    # ── Spotify ──────────────────────────────────────────────────────
+
+    def _run_spotify_lane(self, links: list[str]) -> list[LinkResult]:
+        cfg = lane("spotify", self.speed, self.max_workers)
+        total = len(links)
+        task_name = f"spotify ({total} links)"
+        self.tui.add_task(task_name, total=total)
+        self.logger.info(f"🎯 spotify: {total} playlist(s) · {cfg.workers} at a time · "
+                         f"{cfg.threads} spotdl threads")
+        results: list[LinkResult] = []
+        with ThreadPoolExecutor(max_workers=max(1, min(cfg.workers, total)),
+                                thread_name_prefix="spotify") as executor:
+            futures = {executor.submit(self._download_spotify_link, link, i, total): link
+                       for i, link in enumerate(links, 1)}
+            for future in as_completed(futures):
+                try:
+                    results.append(future.result())
+                except Exception as e:
+                    link = futures[future]
+                    self.logger.error(f"💥 spotify crashed on {link}: {e}")
+                    results.append(LinkResult("spotify", link, link, CODE_FAILED))
+                self.tui.advance(task_name)
+        return results
+
+    def _download_spotify_link(self, link: str, index: int, total: int) -> LinkResult:
+        """One Spotify link, entirely through spotdl.
+
+        spotdl reads the playlist and hands its song list over mid-run (see
+        spotdl_runner.py). That's the moment the record is synced, tracks
+        already downloaded for another playlist are copied in, old copies of
+        tracks being re-downloaded are set aside, and spotdl is told which
+        songs to skip. After the run the record is reconciled against the disk.
         """
-        d = self._downloaders.get(provider)
-        if d is not None:
-            return d
-        with self._downloader_lock:
-            d = self._downloaders.get(provider)
-            if d is None:
-                d = self._build_downloader(provider)
-                self._downloaders[provider] = d
-            return d
+        provider = "spotify"
+        downloader = self._get_spotify()
+        kind = link_kind(link)
+        short = link.split("?")[0].rstrip("/").split("/")[-1] or link
 
-    # ── Phase 1: Download only (no cleanup) ──────────────────────────
-
-    def _download_single_link(self, provider: str, link: str,
-                               index: int, total: int) -> LinkResult:
-        """Download one link — no cleanup. Safe to run concurrently."""
-        downloader = self._get_downloader(provider)
-        short_link = link.split("?")[0].split("/")[-1] or link.split("?")[0]
-
-        # Progress callback is passed per download call, so a shared downloader
-        # instance can serve several concurrent links without them clobbering
-        # one another's callback.
-        def _forward_progress(evt: str, data: dict) -> None:
+        def forward(evt: str, data: dict) -> None:
             self.tui.track_progress(provider, link, evt, data)
 
-        # ── Pre-fetch metadata for richer link_started event ──────────
-        playlist_name = short_link
-        total_tracks = 0
-        track_list: List[Dict[str, Any]] = []
-        if provider == "spotify":
-            # Name resolution and track-list parsing are kept in separate try
-            # blocks. They used to share one, so a failure midway (pagination
-            # returning HTTP 400, for instance) discarded the entire track list
-            # and the playlist rendered with no expandable songs.
-            try:
-                playlist_name = downloader.fetch_metadata_image(link) or short_link
-            except Exception as e:
-                self.logger.warning(f"Spotify metadata fetch failed: {e}")
+        if self.cancel.is_set():
+            self.tui.link_complete(provider, link, short, CODE_CANCELLED)
+            return LinkResult(provider, link, short, CODE_CANCELLED, index, total)
 
-            try:
-                safe_name = "".join(
-                    c for c in playlist_name if c.isalnum() or c in (' ', '-', '_')
-                ).rstrip()
-                meta_path = self.output_dir / ".metadata" / f"{safe_name}.json"
-                if meta_path.is_file():
-                    with open(meta_path, encoding="utf-8") as f:
-                        meta = json.load(f)
-                    # Normalize: Spotify wraps playlist tracks in .track, albums are direct
-                    raw_items = meta.get("tracks", {}).get("items", [])
-                    total_tracks = meta.get("tracks", {}).get("total", len(raw_items))
-                    for pos, item in enumerate(raw_items, 1):
-                        t = item.get("track") or item  # playlist → .track, album → direct
-                        if not isinstance(t, dict):
-                            continue
-                        track_list.append({
-                            # Playlist position, not the album track number —
-                            # the latter repeats across albums (1, 1, 1, 3, ...).
-                            "num": pos,
-                            "title": t.get("name", ""),
-                            "artists": [a.get("name", "") for a in t.get("artists", []) if a],
-                            "duration_ms": t.get("duration_ms", 0),
-                            # spotdl reports failures by Spotify track URL, so
-                            # the id is what lets us mark the right row failed.
-                            # Local files added to a playlist have no id.
-                            "id": t.get("id") or "",
-                            "local": bool(item.get("is_local") or t.get("is_local")),
-                        })
-                    self.logger.info(
-                        f"📊 {playlist_name}: {total_tracks} tracks "
-                        f"({len(track_list)} listed)")
-            except Exception as e:
-                self.logger.warning(f"Track list parse failed: {e}")
+        self.logger.info(f"\n{'=' * 60}")
+        self.logger.info(f"[SPOTIFY {index}/{total}] {link.split('?')[0]}")
+        self.tui.link_started(provider, link, short, 0)
 
-        # Emit link started with real name + track count when available
-        self.tui.link_started(provider, link, playlist_name, total_tracks)
-        if track_list:
-            self.tui.link_metadata(provider, link, track_list)
+        ctx: dict[str, Any] = {}
 
-        self.logger.info(f"\n{'='*60}")
-        self.logger.info(f"[{provider.upper()} {index}/{total}] {short_link}")
+        def on_songs(songs: list[dict[str, Any]]) -> list[str]:
+            tracks = downloader.tracks_from_songs(songs, kind)
+            name = downloader.list_name(songs, kind, short)
+            folder = downloader.folder_for(songs, kind)
+            st = downloader.prepare_state(self.store, link, name, folder, tracks)
+            copied = self._copy_spotify_duplicates(st, folder, tracks, kind)
+            moved = downloader.set_aside_stale(st, folder, tracks)
+            ctx.update(st=st, folder=folder, tracks=tracks, name=name)
+            downloader.save_cover(songs[0].get("cover_url") if songs else None, folder)
 
+            s = st.summary()
+            note = f" ({copied} copied from other playlists)" if copied else ""
+            self.logger.info(f"📋 Spotify: {name} — {s['total']} tracks, {s['done']} done, "
+                             f"{s['left']} to fetch{note}")
+            if moved:
+                self.logger.info(f"📦 Set aside {moved} old cop{'y' if moved == 1 else 'ies'} "
+                                 f"until their re-downloads finish")
+            self.tui.link_started(provider, link, name, len(tracks))
+            self.tui.link_metadata(provider, link, self._ui_tracks(st))
+            return downloader.skip_urls(st)
+
+        run_started = time.time()
+        code, errors_file = 1, None
         try:
-            code, errors_file = downloader.download(link, on_progress=_forward_progress)
-            if code != 0:
-                self.logger.warning(f"Failed (code {code})")
-            # For non-Spotify, fetch metadata after download
-            if provider != "spotify":
-                playlist_name = downloader.fetch_metadata_image(link) or playlist_name
-            elif track_list:
+            code, errors_file = downloader.download(link, on_progress=forward, on_songs=on_songs)
+            if code not in (0, 130):
+                self.logger.warning(f"spotdl exited with code {code}")
+            if ctx and not self.cancel.is_set():
                 # spotdl commits to one YouTube candidate per track and gives up
                 # if it fails, so retry those by searching YouTube ourselves.
-                self._retry_failed_spotify(
-                    downloader, playlist_name, track_list,
-                    errors_file, _forward_progress,
-                )
+                self._retry_failed_spotify(downloader, ctx["folder"], ctx["tracks"], kind,
+                                           errors_file, forward)
         except Exception as e:
             self.logger.error(f"💥 {provider} error on {link}: {e}")
             code = 1
 
-        # Emit link complete
-        self.tui.link_complete(provider, link, playlist_name, code)
+        st: PlaylistState | None = ctx.get("st")
+        name = ctx.get("name", short)
+        if st is None:
+            # spotdl never got as far as listing the songs (or ran without the
+            # handshake): no record to reconcile, only its exit code to go on.
+            final = CODE_CANCELLED if self.cancel.is_set() else (CODE_OK if code == 0 else CODE_FAILED)
+        else:
+            folder, tracks = ctx["folder"], ctx["tracks"]
+            clean_exit = code == 0 and not self.cancel.is_set()
+            downloader.reconcile(st, folder, tracks, run_started, errors_file,
+                                 completed=not self.cancel.is_set() and code != 130,
+                                 check_truncation=not clean_exit)
+            restored = downloader.restore_stale(st, folder, tracks)
+            if restored:
+                self.logger.info(f"📦 Put back {restored} old cop{'y' if restored == 1 else 'ies'} "
+                                 f"whose re-download didn't finish")
+            for t in st.ordered():
+                if t.get("status") == DONE and t.get("id"):
+                    path = st.file_path(t)
+                    if path is not None:
+                        self.done_index.add(provider, t["id"], path)
+            s = st.summary()
+            if s["left"] == 0:
+                final = CODE_OK
+                self.logger.info(f"✅ Spotify: {name} — all {s['done']} tracks downloaded")
+            elif self.cancel.is_set():
+                final = CODE_CANCELLED
+            else:
+                final = CODE_PARTIAL
+                self.logger.warning(f"⚠️ Spotify: {name} — {s['done']}/{s['total']} done · "
+                                    f"{s['failed']} failed. Re-run to retry those.")
+            # The record is exact now; let the track list show exactly that.
+            self.tui.link_metadata(provider, link, self._ui_tracks(st))
 
-        return LinkResult(
-            provider=provider, link=link, playlist_name=playlist_name,
-            code=code, index=index, total=total
-        )
+        self.tui.link_complete(provider, link, name, final)
+        return LinkResult(provider, link, name, final, index, total)
+
+    def _copy_spotify_duplicates(self, st: PlaylistState, folder: str,
+                                 tracks: list[dict[str, Any]], kind: str) -> int:
+        """Copy in tracks another playlist already downloaded, so spotdl skips
+        them. spotdl tags songs with their real album, so the copy needs no
+        retagging — only the position at the front of the filename changes."""
+        if not folder:
+            return 0
+        target_dir = self.output_dir / folder
+        width = len(str(max((t["index"] for t in tracks), default=0))) if kind == "playlist" else 2
+        copied = 0
+        for t in st.ordered():
+            if t.get("status") in (DONE, UNAVAILABLE) or not t.get("id"):
+                continue
+            src = self.done_index.find("spotify", t["id"], not_in=target_dir)
+            if src is None:
+                continue
+            number = t.get("file_index")
+            name = renumber(src.name, number, width if number is not None else 0)
+            try:
+                dst = copy_track(src, target_dir / name)
+            except OSError as e:
+                self.logger.debug(f"Couldn't copy {src.name}: {e}")
+                continue
+            st.mark(t["key"], DONE, file=dst, save=False)
+            copied += 1
+        if copied:
+            st.save()
+        return copied
+
+    @staticmethod
+    def _ui_tracks(st: PlaylistState) -> list[dict[str, Any]]:
+        return [{
+            "num": t.get("index"), "title": t.get("title") or f"Track {t.get('index')}",
+            "artists": t.get("artists") or [], "id": t.get("id") or "",
+            "status": {DONE: "downloaded", UNAVAILABLE: "unavailable",
+                       FAILED: "failed"}.get(t.get("status", ""), "pending"),
+            "error": t.get("error") or "", "archived": t.get("status") == DONE,
+        } for t in st.ordered()]
 
     # ── Recovery pass ────────────────────────────────────────────────
 
-    def _retry_failed_spotify(self, downloader: BaseDownloader, playlist_name: str,
-                              track_list: List[Dict[str, Any]], errors_file: Path,
+    def _retry_failed_spotify(self, downloader: SpotifyDownloader, playlist_dir: str,
+                              tracks: list[dict[str, Any]], kind: str, errors_file: Path | None,
                               emit: Any) -> None:
         """Re-attempt tracks spotdl couldn't fetch, via a direct YouTube search.
 
@@ -177,17 +260,15 @@ class Coordinator:
         if that one is unavailable (age-gated, region-locked, taken down). A
         plain search usually turns up a working upload of the same song.
         """
+        if errors_file is None:
+            return
         failed_ids = downloader._parse_spotdl_errors(errors_file)
         if not failed_ids:
             return
 
-        by_id = {t["id"]: t for t in track_list if t.get("id")}
-        padding = max(2, len(str(len(track_list))))
-        # Filenames live under the playlist directory spotdl created
-        safe_dir = "".join(
-            c for c in playlist_name if c not in '<>:"/\\|?*'
-        ).strip() or playlist_name
-
+        by_id = {t["id"]: t for t in tracks if t.get("id")}
+        # Same numbering as spotdl's {list-position} / {track-number}.
+        padding = len(str(max((t["index"] for t in tracks), default=0))) if kind == "playlist" else 2
         targets = [(tid, by_id[tid]) for tid in failed_ids if tid in by_id]
         if not targets:
             return
@@ -204,6 +285,8 @@ class Coordinator:
 
         recovered = 0
         for tid, t in targets:
+            if self.cancel.is_set():
+                break
             title = t.get("title") or ""
             artists = t.get("artists") or []
             if not title:
@@ -212,8 +295,8 @@ class Coordinator:
                 emit("track_retry", {"track_id": tid, "title": title})
             try:
                 ok = downloader.search_and_download(
-                    title=title, artists=artists, playlist_dir=safe_dir,
-                    position=t.get("num"), padding=padding, on_log=say,
+                    title=title, artists=artists, playlist_dir=playlist_dir,
+                    position=t.get("file_index"), padding=padding, on_log=say,
                 )
             except Exception as e:
                 say(f"Retry crashed for {title}: {e}")
@@ -226,173 +309,80 @@ class Coordinator:
             elif emit:
                 emit("track_failed", {
                     "track_id": tid, "title": title,
-                    "error": "No working source found on Spotify's match or YouTube",
+                    "error": "No working source found on spotdl's match or a YouTube search",
                 })
 
         say(f"🔁 Recovered {recovered}/{len(targets)} previously failed track(s)")
         # One line in the global log so the run summary still reflects it
-        self.logger.info(
-            f"🔁 {playlist_name}: recovered {recovered}/{len(targets)} failed track(s)")
-
-    # ── Phase 2: Cleanup (runs after all downloads complete) ──────────
-
-    def _cleanup_results(self, results: List[LinkResult]) -> None:
-        """Run cleanup once for a completed batch.
-
-        YouTube and SoundCloud cleanup are both whole-directory sweeps, so
-        running one per provider scanned and rewrote every playlist twice —
-        and, because providers run concurrently, two sweeps could hit the same
-        .metadata/<name>.json at once. Do a single sweep instead, and give
-        Spotify its per-playlist pass (it needs the playlist name).
-        """
-        providers = {r.provider for r in results}
-
-        # Spotify: per-playlist, keyed by the name resolved during download
-        if "spotify" in providers:
-            downloader = self._get_downloader("spotify")
-            for r in results:
-                if r.provider != "spotify" or not r.playlist_name:
-                    continue
-                try:
-                    downloader.cleanup(r.playlist_name)
-                except Exception as e:
-                    self.logger.error(f"💥 Cleanup error (spotify/{r.playlist_name}): {e}")
-
-        # YouTube + SoundCloud: one shared directory sweep for both
-        sweepers = [p for p in ("soundcloud", "youtube") if p in providers]
-        if sweepers:
-            # SoundCloud additionally clears stray root-level .info.json files,
-            # so prefer it as the sweeper when present.
-            provider = sweepers[0]
-            try:
-                self._get_downloader(provider).cleanup("")
-            except Exception as e:
-                self.logger.error(f"💥 Cleanup error ({provider}): {e}")
-
-    # ── Per-provider processing ──────────────────────────────────────
-
-    def process_provider(self, provider: str, links: List[str]) -> List[LinkResult]:
-        """Download every link for one provider. Cleanup happens later, once
-        all providers have finished, so concurrent sweeps cannot race."""
-        if not links:
-            self.logger.info(f"ℹ️ No {provider} links")
-            return []
-
-        self.logger.info(f"🎯 Starting {len(links)} {provider} links...")
-
-        if self.parallel and len(links) > 1:
-            results = self._download_parallel(provider, links)
-        else:
-            results = self._download_sequential(provider, links)
-
-        exit_code = max((r.code for r in results), default=0)
-        self.logger.info(f"✅ {provider} downloads done (exit: {exit_code})")
-        return results
-
-    def _download_sequential(self, provider: str, links: List[str]) -> List[LinkResult]:
-        """Download links one at a time (no cleanup)."""
-        results: List[LinkResult] = []
-        total = len(links)
-        task_name = f"{provider} ({total} links)"
-        self.tui.add_task(task_name, total=total)
-
-        for i, link in enumerate(links, 1):
-            short_link = link.split("?")[0].split("/")[-1] or link.split("?")[0]
-            self.tui.update_description(task_name, f"[cyan]{provider}[/] {short_link}")
-            result = self._download_single_link(provider, link, i, total)
-            results.append(result)
-            self.tui.advance(task_name)
-        return results
-
-    def _download_parallel(self, provider: str, links: List[str]) -> List[LinkResult]:
-        """Download links concurrently within a provider (no cleanup)."""
-        results: List[LinkResult] = []
-        total = len(links)
-        indexed_links = [(i + 1, link) for i, link in enumerate(links)]
-        task_name = f"{provider} ({total} links)"
-        self.tui.add_task(task_name, total=total)
-
-        with ThreadPoolExecutor(max_workers=min(self.max_workers, total)) as executor:
-            futures = {
-                executor.submit(self._download_single_link, provider, link, idx, total): link
-                for idx, link in indexed_links
-            }
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    results.append(result)
-                    self.tui.advance(task_name)
-                except Exception as e:
-                    self.logger.error(f"💥 Parallel task crashed: {e}")
-        return results
+        self.logger.info(f"🔁 recovered {recovered}/{len(targets)} failed track(s)")
 
     # ── Cross-provider orchestration ─────────────────────────────────
 
-    def process_all(self, input_file: Path, providers: List[str] | None = None) -> int:
-        """Run every provider's download phase, then cleanup once.
+    def _run_lane(self, provider: str, links: list[str]) -> list[LinkResult]:
+        self.logger.info(f"🎯 Starting {len(links)} {provider} link(s)...")
+        if provider in ENGINE_PROVIDERS:
+            results = self._run_engine_lane(provider, links)
+        else:
+            results = self._run_spotify_lane(links)
+        worst = max((r.code for r in results), default=0)
+        self.logger.info(f"🏁 {provider} lane done (worst code: {worst})")
+        return results
 
-        With `parallel` set the providers run concurrently; without it the run
-        is fully sequential — one provider at a time, and one link at a time
-        inside each.
-        """
+    def process_all(self, input_file: Path, providers: list[str] | None = None) -> int:
+        """Run every provider lane concurrently. Returns the worst playlist code."""
         if providers is None:
             providers = ["soundcloud", "youtube", "spotify"]
 
         links_by_provider = read_links(input_file, self.logger)
-        active_providers = [(p, links_by_provider.get(p, [])) for p in providers if links_by_provider.get(p)]
-
-        if not active_providers:
+        active = [(p, links_by_provider.get(p, [])) for p in providers if links_by_provider.get(p)]
+        if not active:
             self.logger.info("ℹ️ No links found for any provider")
             return 0
 
+        self.logger.info(f"⚙️ Speed: {self.speed} · {len(self.done_index)} tracks already on disk")
         exit_code = 0
-
-        all_results: List[LinkResult] = []
-
         with self.tui:
-            # Providers used to always run concurrently here, so switching
-            # --parallel off only serialised the links *within* a provider —
-            # SoundCloud still ran alongside everything else. With it off the
-            # whole run is now single-threaded: one provider, one playlist, one
-            # track at a time, which is what keeps SoundCloud under its
-            # per-IP rate limit.
-            if self.parallel and len(active_providers) > 1:
-                with ThreadPoolExecutor(max_workers=min(len(active_providers), self.max_workers)) as executor:
-                    future_to_provider = {
-                        executor.submit(self.process_provider, p, links): p
-                        for p, links in active_providers
-                    }
-                    for future in as_completed(future_to_provider):
-                        provider = future_to_provider[future]
-                        try:
-                            results = future.result()
-                            all_results.extend(results)
-                            code = max((r.code for r in results), default=0)
-                            if code != 0:
-                                exit_code = code
-                        except Exception as e:
-                            self.logger.error(f"💥 {provider} provider crashed: {e}")
-                            exit_code = 1
-            else:
-                if len(active_providers) > 1:
-                    self.logger.info("🐌 Sequential mode — one provider at a time")
-                for provider, links in active_providers:
+            with ThreadPoolExecutor(max_workers=len(active), thread_name_prefix="lane") as executor:
+                futures = {executor.submit(self._run_lane, p, links): p for p, links in active}
+                pending = set(futures)
+                while pending:
                     try:
-                        results = self.process_provider(provider, links)
-                        all_results.extend(results)
-                        code = max((r.code for r in results), default=0)
-                        if code != 0:
-                            exit_code = code
-                    except Exception as e:
-                        self.logger.error(f"💥 {provider} provider crashed: {e}")
-                        exit_code = 1
+                        # Waited in 1s slices: a wait with no timeout can't be
+                        # interrupted by Ctrl-C on Windows.
+                        for future in as_completed(set(pending), timeout=1.0):
+                            pending.discard(future)
+                            provider = futures[future]
+                            try:
+                                results = future.result()
+                                exit_code = max([exit_code] + [r.code for r in results])
+                            except Exception as e:
+                                self.logger.error(f"💥 {provider} lane crashed: {e}")
+                                exit_code = max(exit_code, 1)
+                    except TimeoutError:
+                        continue
+                    except KeyboardInterrupt:
+                        # Ctrl-C in the CLI: stop cleanly, so whatever finished
+                        # is recorded and everything else stays "to do".
+                        self.logger.warning("⏹️ Stopping — finishing up and saving progress...")
+                        self.cancel.set()
 
-            # Single cleanup barrier once every provider has finished writing.
-            # Doing this per provider meant the output tree was swept once per
-            # provider, concurrently, on the same metadata files.
-            if all_results:
-                self.logger.info("🧹 Running cleanup...")
-                self._cleanup_results(all_results)
-
+        self._log_summary()
         self.logger.info(f"🏁 All providers complete (exit: {exit_code})")
         return exit_code
+
+    def totals(self) -> dict[str, int]:
+        """Track counts across every playlist this run touched."""
+        totals = {"done": 0, "failed": 0, "pending": 0, "unavailable": 0, "total": 0}
+        for st in self.store.opened():
+            s = st.summary()
+            for k in totals:
+                totals[k] += int(s.get(k, 0))
+        return totals
+
+    def _log_summary(self) -> None:
+        t = self.totals()
+        if not t["total"]:
+            return
+        self.logger.info(
+            f"📊 {t['done']}/{t['total']} tracks done · {t['failed']} failed · "
+            f"{t['pending']} still to do · {t['unavailable']} unavailable")

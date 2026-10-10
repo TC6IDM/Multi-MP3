@@ -1,10 +1,81 @@
+import functools
 import logging
 import os
-from pathlib import Path
 import re
+import shutil
 import sys
-from typing import Dict, List, Tuple
+from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+@functools.lru_cache(maxsize=1)
+def deno_path() -> str | None:
+    """The deno binary yt-dlp needs for YouTube's JS challenge.
+
+    Prefers the copy the `deno` wheel installs into this venv, so a native run
+    works without a separate install; falls back to whatever is on PATH.
+    """
+    try:
+        import deno
+        path = deno.find_deno_bin()
+        if path and Path(path).is_file():
+            return str(path)
+    except Exception:
+        pass
+    return shutil.which("deno")
+
+
+def subprocess_env() -> dict[str, str]:
+    """Environment for child tools, with deno's directory on PATH.
+
+    spotdl drives its own yt-dlp with `--js-runtimes deno`, which looks deno up
+    on PATH — and a venv's Scripts directory is only on PATH when activated.
+    """
+    env = os.environ.copy()
+    deno = deno_path()
+    if deno:
+        env["PATH"] = str(Path(deno).parent) + os.pathsep + env.get("PATH", "")
+    return env
+
+
+def spotdl_command() -> str | None:
+    """Path to the spotdl executable, which lives in its own virtualenv.
+
+    Every spotdl release pins fastapi<0.104, uvicorn<0.24 and rich<14, so it
+    can't share the app's environment without freezing the web stack. Order:
+    SPOTDL_BIN, then the project's .venv-spotdl, then PATH.
+    """
+    env_bin = os.getenv("SPOTDL_BIN", "").strip()
+    if env_bin:
+        return env_bin
+    for candidate in (PROJECT_ROOT / ".venv-spotdl" / "Scripts" / "spotdl.exe",
+                      PROJECT_ROOT / ".venv-spotdl" / "bin" / "spotdl"):
+        if candidate.is_file():
+            return str(candidate)
+    return shutil.which("spotdl")
+
+
+def spotdl_python() -> str | None:
+    """The Python interpreter of spotdl's virtualenv, for spotdl_runner.py.
+
+    Found next to the spotdl executable (Scripts\\python.exe / bin/python).
+    SPOTDL_PYTHON overrides. None when spotdl wasn't installed into a venv of
+    its own (pipx, a system package) — then spotdl runs plain, without the
+    track-list handshake.
+    """
+    env_py = os.getenv("SPOTDL_PYTHON", "").strip()
+    if env_py:
+        return env_py
+    spotdl = spotdl_command()
+    if not spotdl:
+        return None
+    folder = Path(spotdl).parent
+    for name in ("python.exe", "python3", "python"):
+        candidate = folder / name
+        if candidate.is_file():
+            return str(candidate)
+    return None
 
 
 def setup_logging(output_dir: Path) -> logging.Logger:
@@ -12,12 +83,18 @@ def setup_logging(output_dir: Path) -> logging.Logger:
     output_dir.mkdir(parents=True, exist_ok=True)
     log_file = output_dir / "spotdl.log"
 
+    # Piped or redirected on Windows, stdout falls back to cp1252, and every
+    # emoji in the log ("✅", "⏳") became a logging error instead of a line.
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8", errors="replace")
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s | %(levelname)s | %(threadName)s | %(message)s',
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler(log_file)
+            logging.FileHandler(log_file, encoding="utf-8")
         ]
     )
     logger = logging.getLogger(__name__)
@@ -76,11 +153,11 @@ def provider_for(url: str) -> str | None:
     return None
 
 
-def read_links(input_path: Path, logger: logging.Logger) -> Dict[str, List[str]]:
+def read_links(input_path: Path, logger: logging.Logger) -> dict[str, list[str]]:
     """Read and categorize all links from the input file by provider."""
-    spotify_links: List[str] = []
-    soundcloud_links: List[str] = []
-    youtube_links: List[str] = []
+    spotify_links: list[str] = []
+    soundcloud_links: list[str] = []
+    youtube_links: list[str] = []
     buckets = {
         "spotify": spotify_links,
         "soundcloud": soundcloud_links,
@@ -122,16 +199,16 @@ def read_links(input_path: Path, logger: logging.Logger) -> Dict[str, List[str]]
         return {"spotify": [], "soundcloud": [], "youtube": []}
 
 
-def get_spotify_creds(logger: logging.Logger) -> Tuple[str, str]:
-    """Load and validate Spotify CLIENTID/CLIENTSECRET from .env or env vars."""
-    client_id = os.getenv("CLIENTID")
-    client_secret = os.getenv("CLIENTSECRET")
+def get_spotify_creds(logger: logging.Logger) -> tuple[str, str]:
+    """Spotify CLIENTID/CLIENTSECRET from .env or env vars — optional.
 
-    if not client_id or not client_secret:
-        logger.error("❌ Missing CLIENTID or CLIENTSECRET in .env")
-        raise ValueError("Spotify credentials required")
-
-    os.environ["SPOTIFY_CLIENT_ID"] = client_id
-    os.environ["SPOTIFY_CLIENT_SECRET"] = client_secret
-    logger.info("🔑 Spotify creds loaded")
-    return client_id, client_secret
+    spotdl is the primary Spotify source and reads Spotify without the
+    developer API by default, so credentials are only passed through when
+    present. (Spotify now refuses developer apps whose owner lacks Premium.)
+    """
+    client_id = os.getenv("CLIENTID", "").strip()
+    client_secret = os.getenv("CLIENTSECRET", "").strip()
+    if client_id and client_secret:
+        logger.info("🔑 Spotify creds loaded (passed to spotdl)")
+        return client_id, client_secret
+    return "", ""
