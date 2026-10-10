@@ -108,6 +108,7 @@
     </div>
   </div>
   <div id="queue" class="queue" hidden></div>
+  <div id="run-advice"></div>
   <div id="provider-accordion"><p class="empty">Nothing running. Start a download from Links.</p></div>
   <details class="run-log">
     <summary>Run log</summary>
@@ -144,6 +145,7 @@
   <div class="sys-block">
     <h2>Tools</h2>
     <p>yt-dlp breaks whenever YouTube or SoundCloud change their sites, and fixes usually ship within days — so it can be updated here without waiting for a new version of this app.</p>
+    <div id="sys-health"></div>
     <dl id="sys-facts" class="facts"><dt>Loading…</dt><dd></dd></dl>
     <div class="sys-actions" style="margin-top:16px">
       <button id="btn-check-update" class="btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>Check for updates</button>
@@ -689,6 +691,7 @@ function attachToJob(jobId, { switchTab = false, links = null } = {}) {
   if (es) es.close();
   attachedJobId = jobId;
   resetLiveDOM();
+  showAdvice([]);
   liveState = { providers: {}, currentJobId: jobId };
   if (links) prepopulate(links);
   globalLog = [];
@@ -1012,6 +1015,7 @@ function finishLive(d) {
   }
   syncAccordion();
   setRunStatus(STATUS_LABEL[status] ? status : 'idle');
+  if (d.advice) showAdvice(d.advice);
   if (d.title) {
     announce(d.title + '. ' + (d.summary || ''));
     if ('Notification' in window && Notification.permission === 'granted' && document.visibilityState !== 'visible') {
@@ -1023,6 +1027,24 @@ function finishLive(d) {
   // The Links list shows each playlist's sync state; refresh it, unless a
   // label is mid-edit.
   if (!rawDirty && !$('link-list').contains(document.activeElement)) loadLinks();
+}
+
+// Suggestions a run ends with (e.g. "update yt-dlp"), shown under the Live
+// heading with a way to act on them.
+function adviceNotice(text) {
+  const n = mk('p', 'notice');
+  n.appendChild(icon('alert'));
+  const body = mk('span', '', text + ' ');
+  const go = mk('a', '', 'Open System');
+  go.href = '#system';
+  body.appendChild(go);
+  n.appendChild(body);
+  return n;
+}
+function showAdvice(list) {
+  const root = $('run-advice');
+  root.textContent = '';
+  for (const text of list || []) root.appendChild(adviceNotice(text));
 }
 
 $('btn-cancel').addEventListener('click', async () => {
@@ -1372,7 +1394,9 @@ async function loadLibrary(force) {
     const d = await api('/api/library');
     libItems = d.items;
     libraryStale = false;
-    setText($('lib-totals'), `${plural(d.items.length, 'playlist')} · ${d.total_files.toLocaleString()} tracks · ${fmtBytes(d.total_bytes)}`);
+    let totals = `${plural(d.items.length, 'playlist')} · ${d.total_files.toLocaleString()} tracks · ${fmtBytes(d.total_bytes)}`;
+    if (d.removed_files) totals += ` · ${plural(d.removed_files, 'removed song')} kept in _removed`;
+    setText($('lib-totals'), totals);
   } catch (e) { toast(e.message, 'bad'); return; }
   renderLibrary();
   loadReportCount();
@@ -1419,6 +1443,11 @@ function libraryRow(it) {
     if (it.pending) meta.appendChild(mk('span', 'left', `${it.pending} to do`));
     if (it.failed) meta.appendChild(mk('span', 'bad', `${it.failed} failed`));
     if (it.unavailable) meta.appendChild(mk('span', '', `${it.unavailable} unavailable`));
+    if (it.removed) {
+      const rm = mk('span', '', `${it.removed} removed`);
+      rm.title = 'No longer in the source playlist. The files were moved to _removed, not deleted, and come back if the songs are added again.';
+      meta.appendChild(rm);
+    }
   } else {
     const nt = mk('span', '', 'Not tracked yet');
     nt.title = 'Downloaded before progress records existed — it gets one the next time it runs';
@@ -1602,7 +1631,18 @@ async function loadSystem(check) {
   fact('spotdl', v.spotdl ? `${v.spotdl} (its yt-dlp: ${v.spotdl_yt_dlp || '—'})` : (v.spotdl_found ? 'found' : 'not installed'));
   fact('deno', v.deno || 'not found');
   fact('ffmpeg', v.ffmpeg ? 'found' : 'not found');
+  fact('Volume levelling', v.level && v.level.enabled
+    ? `On · ${String(v.level.target_lufs).replace('-', '−')} LUFS, lossless`
+    : 'Off');
   fact('Python', v.python);
+  const health = $('sys-health');
+  health.textContent = '';
+  for (const h of v.health || []) {
+    const n = mk('p', 'notice');
+    n.appendChild(icon('alert'));
+    n.appendChild(mk('span', '', h.message.replace(' (System → Update yt-dlp)', '')));
+    health.appendChild(n);
+  }
   renderNotifyButton();
 }
 $('btn-check-update').addEventListener('click', () => loadSystem(true));

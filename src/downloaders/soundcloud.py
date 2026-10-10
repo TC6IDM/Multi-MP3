@@ -72,7 +72,7 @@ class SoundCloudDownloader:
             provider="soundcloud", label="SoundCloud", ydl_args=args, outtmpl=self.OUTTMPL,
             workers=lane.workers, limiter=limiter,
             max_attempts=env_int("SOUNDCLOUD_MAX_ATTEMPTS", 3),
-            forbidden_is_rate_limit=True, legacy_archive=True, tags_from_playlist=True,
+            forbidden_is_rate_limit=True, legacy_archive=True,
             before_run=self._seed_client_id, refresh_auth=self._refresh_client_id,
             backfill=self._backfill_titles,
         )

@@ -8,6 +8,7 @@ from src.coordinator import Coordinator
 from src.downloaders.spotify import SpotifyDownloader, link_kind, spotdl_folder_name
 from src.models import CODE_OK, CODE_PARTIAL
 from src.state import DONE, FAILED, PENDING, StateStore
+from src.tidy import Finisher
 from src.tui import DownloadProgress
 
 LINK = "https://open.spotify.com/playlist/0SeWUhJeF037ZDWZeBxEZl?si=x"
@@ -47,7 +48,7 @@ def test_runner_is_launched_isolated(tmp_path, monkeypatch):
     captured = {}
     d._download = lambda name, link, cmd, **kw: captured.setdefault("cmd", cmd) and (0, None)  # type: ignore[method-assign]
     d.download(LINK, on_songs=lambda s: [])
-    assert captured["cmd"][:3] == ["py", "-I", str(spotify_mod.SPOTDL_RUNNER)]
+    assert captured["cmd"][:5] == ["py", "-I", "-X", "utf8", str(spotify_mod.SPOTDL_RUNNER)]
     assert "--overwrite" in captured["cmd"] and "force" in captured["cmd"]
 
 
@@ -150,12 +151,21 @@ class FakeSpotdl:
         return 0, self.folder.parent / ".errors" / "none.txt"
 
 
-def run_spotify(tmp_path, fake):
+def make_coord(tmp_path):
     coord = Coordinator(tmp_path, LOG, progress=DownloadProgress(enabled=False))
+    # Tags only (no ffmpeg on fake MP3s); tests wait for it with close().
+    coord.finisher = Finisher(LOG, coord.cancel, level=False, workers=1)
+    return coord
+
+
+def run_spotify(tmp_path, fake, link=LINK):
+    coord = make_coord(tmp_path)
     d = coord._get_spotify()
     d.download = fake            # type: ignore[method-assign]
     d.search_and_download = lambda **kw: False   # type: ignore[method-assign]
-    return coord._download_spotify_link(LINK, 1, 1), coord
+    result = coord._download_spotify_link(link, 1, 1)
+    coord.finisher.close()
+    return result, coord
 
 
 def test_spotify_run_records_every_track_through_the_handshake(tmp_path):
@@ -165,6 +175,28 @@ def test_spotify_run_records_every_track_through_the_handshake(tmp_path):
     assert fake.downloaded == ["id1", "id2", "id3"]
     s = coord.store.open("spotify", LINK).summary()
     assert (s["done"], s["total"]) == (3, 3)
+    names = sorted(p.name for p in (tmp_path / "PL").glob("*.mp3"))
+    assert names == ["(0001) Song 1.mp3", "(0002) Song 2.mp3", "(0003) Song 3.mp3"]
+
+
+def test_spotify_files_get_a_sort_title_in_playlist_order(tmp_path):
+    from mutagen.id3 import ID3
+
+    run_spotify(tmp_path, FakeSpotdl(tmp_path / "PL", songs()))
+    tags = ID3(tmp_path / "PL" / "(0002) Song 2.mp3")
+    assert str(tags["TIT2"]) == "Song 2"                     # what Apple Music shows
+    assert str(tags["TSOT"]) == "(0002) Song 2"              # what it sorts by
+    assert tags.version == (2, 3, 0)
+
+
+def test_reset_spotify_redownload_lands_under_the_same_name(tmp_path):
+    run_spotify(tmp_path, FakeSpotdl(tmp_path / "PL", songs()))
+    StateStore(tmp_path).reset()
+    again = FakeSpotdl(tmp_path / "PL", songs())
+    run_spotify(tmp_path, again)
+    assert again.downloaded == ["id1", "id2", "id3"]
+    names = sorted(p.name for p in (tmp_path / "PL").glob("*.mp3"))
+    assert names == ["(0001) Song 1.mp3", "(0002) Song 2.mp3", "(0003) Song 3.mp3"]
 
 
 def test_second_spotify_run_skips_everything_it_has(tmp_path):
@@ -188,9 +220,7 @@ def test_song_in_two_playlists_is_downloaded_once(tmp_path):
     listing[0].update(url="https://open.spotify.com/track/id3", song_id="id3", name="Song 3")
     listing[1].update(url="https://open.spotify.com/track/id9", song_id="id9", name="Song 9")
     fake = FakeSpotdl(tmp_path / "Second", listing)
-    coord = Coordinator(tmp_path, LOG, progress=DownloadProgress(enabled=False))
-    coord._get_spotify().download = fake  # type: ignore[method-assign]
-    coord._download_spotify_link(other, 1, 1)
+    run_spotify(tmp_path, fake, other)
     assert fake.downloaded == ["id9"]                          # id3 was copied, not fetched
-    copied = tmp_path / "Second" / "1 Song 3 - A.mp3"
-    assert copied.read_bytes() == b"spotdl"
+    copied = tmp_path / "Second" / "(0001) Song 3.mp3"
+    assert copied.read_bytes().endswith(b"spotdl")

@@ -21,14 +21,15 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from src import health, loudness, maintenance
 from src import links as links_file
-from src import maintenance
 from src.coordinator import Coordinator
 from src.event_bus import EventBus
 from src.job_manager import Job, JobManager
 from src.notify import notify, run_summary
 from src.settings import DEFAULT_SPEED, SPEEDS
 from src.state import FAILED, PENDING, UNAVAILABLE, StateStore
+from src.tidy import REMOVED_DIR
 from src.utils import clean_url, deno_path, get_spotify_creds, provider_for, spotdl_command
 from src.web_handler import SSELogHandler
 from src.web_progress import WebProgress
@@ -239,11 +240,12 @@ def run_download_job(job: Job, output_dir: Path, bus: EventBus) -> None:
     finished = mgr.complete_job(exit_code, counts)
     status = finished.status if finished else ("completed" if exit_code == 0 else "failed")
     title, message = run_summary(status, counts)
-    notify(title, message, logger)
+    # "Update yt-dlp"-type suggestions ride along to the phone and the Live tab.
+    notify(title, "\n".join([message, *coord.advice]), logger)
     bus.push(json.dumps({
         "type": "job.completed" if status == "completed" else f"job.{status}",
         "job_id": job_id, "exit_code": exit_code, "status": status,
-        "summary": message, "title": title,
+        "summary": message, "title": title, "advice": coord.advice,
     }))
     bus.close()
     timer = threading.Timer(BUS_GRACE_SECONDS, lambda: _buses().pop(job_id, None))
@@ -593,7 +595,8 @@ def api_library():
     """Playlists with their progress, size and cover — records merged with the
     folders on disk, so a playlist downloaded before records existed still shows."""
     folders = {d.name: d for d in DEFAULT_OUTPUT.iterdir()
-               if d.is_dir() and not d.name.startswith(".")} if DEFAULT_OUTPUT.is_dir() else {}
+               if d.is_dir() and not d.name.startswith(".") and d.name != REMOVED_DIR
+               } if DEFAULT_OUTPUT.is_dir() else {}
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
     for st in StateStore(DEFAULT_OUTPUT).all():
@@ -613,9 +616,18 @@ def api_library():
                       "files": files, "size_bytes": size, "has_folder": True,
                       "cover": _cover_for(name, name)})
     items.sort(key=lambda s: (s.get("name") or "").lower())
+    removed_files = removed_bytes = 0
+    for f in (DEFAULT_OUTPUT / REMOVED_DIR).rglob("*.mp3"):
+        try:
+            removed_bytes += f.stat().st_size
+            removed_files += 1
+        except OSError:
+            pass
     return {"items": items,
             "total_bytes": sum(i["size_bytes"] for i in items),
-            "total_files": sum(i["files"] for i in items)}
+            "total_files": sum(i["files"] for i in items),
+            # Songs that left their playlist (kept, not deleted).
+            "removed_files": removed_files, "removed_bytes": removed_bytes}
 
 
 @app.get("/api/covers/{name}")
@@ -633,6 +645,11 @@ def api_system(check: bool = False):
     info = maintenance.versions()
     if check:
         info["yt_dlp_latest"] = maintenance.latest_ytdlp()
+    # Providers whose last run failed far more than usual — the sign of a
+    # yt-dlp that needs updating.
+    info["health"] = health.assess(DEFAULT_OUTPUT, info.get("yt_dlp"), info.get("spotdl_yt_dlp"))
+    info["level"] = {"enabled": loudness.enabled() and bool(info.get("ffmpeg")),
+                     "target_lufs": loudness.target_lufs()}
     return info
 
 

@@ -17,6 +17,7 @@ Per playlist:
   2. reconcile — the state record says which tracks are done; those cost nothing
   3. queue     — everything else goes to the provider's workers
   4. record    — each finished track is written to the record immediately
+  5. finish    — named "(0001) Title.mp3", tagged and levelled (src/tidy.py)
 """
 
 from __future__ import annotations
@@ -37,10 +38,12 @@ import yt_dlp
 from yt_dlp.networking.exceptions import HTTPError
 from yt_dlp.utils import DownloadCancelled
 
-from src.dedupe import DoneIndex, copy_track, renumber
+from src import health
+from src.dedupe import DoneIndex, copy_track
 from src.models import CODE_CANCELLED, CODE_FAILED, CODE_OK, CODE_PARTIAL, LinkResult
 from src.ratelimit import AdaptiveRateLimiter
-from src.state import DONE, FAILED, PENDING, UNAVAILABLE, PlaylistState, StateStore, index_files, read_legacy_archive
+from src.state import DONE, FAILED, PENDING, UNAVAILABLE, PlaylistState, StateStore, read_legacy_archive
+from src.tidy import Finisher, finish_file, match_files, plan_for, replace_superseded, tidy_playlist
 from src.tui import DownloadProgress
 
 # ── Failure classification ──────────────────────────────────────────────
@@ -135,9 +138,6 @@ class EngineProfile:
     # Give up on the lane after this many back-to-back cooldowns (~35 min with
     # the default 60/180/600s schedule) instead of waiting forever.
     give_up_after: int = 5
-    # The files carry the playlist in their tags (album = playlist, track =
-    # position), so a copy into another playlist needs retagging.
-    tags_from_playlist: bool = False
     before_run: Callable[[YtDlpEngine], None] | None = None
     refresh_auth: Callable[[YtDlpEngine], bool] | None = None
     backfill: Callable[[YtDlpEngine, list[dict[str, Any]]], None] | None = None
@@ -282,10 +282,14 @@ class YtDlpEngine:
     def __init__(self, profile: EngineProfile, output_dir: Path, logger: logging.Logger,
                  store: StateStore, progress: DownloadProgress,
                  cancel: threading.Event | None = None,
-                 done_index: DoneIndex | None = None) -> None:
+                 done_index: DoneIndex | None = None,
+                 finisher: Finisher | None = None) -> None:
         self.p = profile
         # Tracks already downloaded for another playlist are copied, not fetched.
         self.done_index = done_index
+        # Tags and volume for files that predate this run (new downloads are
+        # finished by the worker before they're moved into place).
+        self.finisher = finisher
         self.output_dir = output_dir.resolve()
         self.cachedir = self.output_dir / ".cache" / "yt-dlp"
         # Workers download here and only move finished files into place (see
@@ -304,6 +308,10 @@ class YtDlpEngine:
         self._lock = threading.Lock()
         self._params = self._build_params()
         self._task = ""
+        self.run_started = time.time()
+        # For health.py: did tracks fail far more than usual this run?
+        self._downloaded = 0
+        self._failures: list[str] = []
 
     @property
     def provider(self) -> str:
@@ -391,6 +399,7 @@ class YtDlpEngine:
             except Exception as e:
                 self.logger.warning(f"{self.p.label} setup step failed: {e}")
 
+        self.run_started = time.time()
         self._task = f"{self.provider} ({len(links)} playlists)"
         self.progress.add_task(self._task, total=len(links))
         # Only one job runs at a time, so anything in staging is debris from an
@@ -417,6 +426,7 @@ class YtDlpEngine:
         for pl in playlists:
             self._finish(pl)
         shutil.rmtree(self.staging, ignore_errors=True)
+        health.record(self.output_dir, self.provider, self._downloaded, self._failures)
         return [LinkResult(self.provider, pl.link, pl.name or pl.link, pl.code, pl.position, len(links))
                 for pl in playlists]
 
@@ -557,9 +567,16 @@ class YtDlpEngine:
             except Exception as e:
                 self.logger.debug(f"Title backfill failed: {e}")
 
-        st.update_meta(name=pl.name, folder=pl.folder, url=pl.link)
+        st.update_meta(name=pl.name, folder=pl.folder, url=pl.link,
+                       album_artist=pl.extra.get("playlist_uploader"))
+        if not tracks and st.summary()["total"]:
+            self.logger.warning(f"⚠️ {self.p.label}: {pl.name} came back empty — keeping what the "
+                                f"record had rather than treating every track as removed")
         st.sync_tracks(tracks)
         imported = self._seed(st, tracks, folder) if first_sight else 0
+        tidied = tidy_playlist(st, since=self.run_started, shared_folder=self.store.shares_folder(st),
+                               on_move=self.done_index.moved if self.done_index else None,
+                               logger=self.logger)
         healed = st.heal()
         st.save()
 
@@ -581,6 +598,8 @@ class YtDlpEngine:
         note = f" (found {imported} already downloaded)" if imported else ""
         if healed:
             note += f" ({healed} deleted since — fetching again)"
+        if tidied.note():
+            note += f" ({tidied.note()})"
         self.logger.info(f"📋 {self.p.label}: {pl.name} — {s['total']} tracks, {s['done']} done, "
                          f"{len(items)} to fetch{note}")
         self.progress.link_started(self.provider, pl.link, pl.name, pl.total, queued=True)
@@ -591,12 +610,12 @@ class YtDlpEngine:
         """First sight of a playlist: count what earlier versions already
         downloaded as done, so switching to records doesn't refetch a library.
         Old SoundCloud archives say exactly which ids finished; otherwise a file
-        whose number matches the track's playlist position is taken as it."""
+        numbered with the track's position — and named like it — is taken as it."""
         archived = read_legacy_archive(self.store.legacy_archive(st.key)) if self.p.legacy_archive else set()
-        files = index_files(self.output_dir / folder) if folder else {}
+        files = match_files(self.output_dir / folder, tracks) if folder else {}
         n = 0
         for t in tracks:
-            path = files.get(t["index"])
+            path = files.get(t["key"])
             if path is not None or (t.get("id") and str(t["id"]) in archived):
                 st.mark(t["key"], DONE, file=path, save=False)
                 n += 1
@@ -658,20 +677,54 @@ class YtDlpEngine:
             self._handle_failure(item, Failure("error", "yt-dlp finished without producing a file"),
                                  issued, queue)
             return
+        assert pl.state is not None
+        st = pl.state
+        st.note(item.key, **self._song_meta(info))
+        plan = plan_for(st, st.track(item.key) or {})
+        finished = None
         try:
-            path = self._promote(staged)
+            # Tagged and levelled while still in staging, so the file that
+            # lands in the playlist folder is already final.
+            finished = finish_file(staged, plan.tags, level=bool(self.finisher and self.finisher.level),
+                                   target=self.finisher.target if self.finisher else -14.0)
+        except Exception as e:
+            self._log(pl, f"⚠️ #{item.index}: couldn't tag or level it ({e}) — keeping it as downloaded")
+        target = (self.output_dir / pl.folder / plan.name) if plan.name and pl.folder else None
+        try:
+            path = self._promote(staged, target)
         except OSError as e:
             # Typically the old copy is open in a player (Windows locks it).
             self._handle_failure(item, Failure("error", f"Couldn't replace the existing file: {e}"),
                                  issued, queue)
             return
-        assert pl.state is not None
-        pl.state.mark(item.key, DONE, file=path, title=(info or {}).get("title"))
+        # A re-download under a new name replaces the old copy, not joins it.
+        replace_superseded(st, item.key, path)
+        extra: dict[str, Any] = {"tagged": plan.sig, "gain": finished.gain} if finished else {}
+        st.mark(item.key, DONE, file=path, **extra)
         if self.done_index is not None:
             self.done_index.add(self.provider, item.entry.get("id"), path)
         self.p.limiter.on_success()
+        with self._lock:
+            self._downloaded += 1
         self._emit(pl, "track_complete", {"index": item.index, "title": path.stem})
         self._track_finished(pl)
+
+    def _song_meta(self, info: dict[str, Any] | None) -> dict[str, Any]:
+        """What the source says the song is, beyond the upload's title."""
+        info = info or {}
+        meta: dict[str, Any] = {}
+        if info.get("title"):
+            meta["title"] = str(info["title"])
+        artists = info.get("artists") or ([info["artist"]] if info.get("artist") else [])
+        artist = ", ".join(str(a) for a in artists if a)
+        # YouTube's `track` is the song as YouTube Music / "Music in this
+        # video" knows it. SoundCloud's is just the upload title again, but its
+        # artist (from a label's publisher metadata) is real.
+        if self.provider == "youtube" and info.get("track"):
+            meta["track_title"] = str(info["track"])
+        if artist:
+            meta["track_artist"] = artist
+        return meta
 
     def _copy_duplicate(self, item: _Track) -> bool:
         """Copy the track from another playlist that already has it. No request,
@@ -683,19 +736,15 @@ class YtDlpEngine:
         src = self.done_index.find(self.provider, item.entry.get("id"), not_in=target_dir)
         if src is None:
             return False
-        m = re.search(r"%\(playlist_index\)0?(\d+)d", self.p.outtmpl)
-        width = int(m.group(1)) if m else 0
-        tags: dict[str, Any] = {}
-        if self.p.tags_from_playlist:
-            tags = {"album": pl.extra.get("playlist"), "album_artist": pl.extra.get("playlist_uploader"),
-                    "track": item.index}
+        plan = plan_for(pl.state, pl.state.track(item.key) or {})
         try:
-            path = copy_track(src, target_dir / renumber(src.name, item.index, width), **tags)
+            path = copy_track(src, target_dir / (plan.name or src.name), plan.tags)
         except OSError as e:
             self.logger.debug(f"Couldn't copy {src.name}: {e}")
             return False
         self._start_playlist(pl)
-        pl.state.mark(item.key, DONE, file=path)
+        replace_superseded(pl.state, item.key, path)
+        pl.state.mark(item.key, DONE, file=path, tagged=plan.sig)
         self._log(pl, f"📎 #{item.index} already downloaded in {src.parent.name} — copied")
         self._emit(pl, "track_complete", {"index": item.index, "title": path.stem, "copied": True})
         self._track_finished(pl)
@@ -720,7 +769,7 @@ class YtDlpEngine:
         except Exception as e:
             self.logger.debug(f"Cover fetch failed: {e}")
 
-    def _promote(self, staged: Path) -> Path:
+    def _promote(self, staged: Path, target: Path | None = None) -> Path:
         """Move a finished file from staging over its real location.
 
         Downloads land in a staging folder first because yt-dlp, told to
@@ -729,11 +778,12 @@ class YtDlpEngine:
         old copy and left a .part in its place. Now the old file is only ever
         replaced, atomically, by a complete new one.
         """
-        try:
-            rel = staged.resolve().relative_to(self.staging.resolve())
-        except ValueError:
-            return staged   # already outside staging; leave it where it is
-        target = self.output_dir / rel
+        if target is None:
+            try:
+                rel = staged.resolve().relative_to(self.staging.resolve())
+            except ValueError:
+                return staged   # already outside staging; leave it where it is
+            target = self.output_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         for attempt in range(5):
             try:
@@ -788,6 +838,8 @@ class YtDlpEngine:
 
     def _record_failure(self, item: _Track, message: str) -> None:
         pl = item.pl
+        with self._lock:
+            self._failures.append(message)
         if pl.state is not None:
             pl.state.mark(item.key, FAILED, error=message)
         self._emit(pl, "track_failed", {"index": item.index, "error": message[:200]})
@@ -864,6 +916,8 @@ class YtDlpEngine:
                     f"⚠️ {label}: {pl.name} — {s['done']}/{s['total']} done · {s['failed']} failed · "
                     f"{s['pending']} still to do{extra}. Re-run to continue from here.")
             self._write_metadata(pl)
+            if self.finisher is not None:
+                self.finisher.submit_playlist(pl.state)
         self.progress.link_complete(self.provider, pl.link, pl.name or pl.link, pl.code)
         if self._task:
             self.progress.advance(self._task)

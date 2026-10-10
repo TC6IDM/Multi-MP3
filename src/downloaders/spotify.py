@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
 
+from src import tidy
 from src.downloaders.base import BaseDownloader
-from src.state import DONE, FAILED, PENDING, UNAVAILABLE, PlaylistState, StateStore, index_files
+from src.state import DONE, FAILED, PENDING, UNAVAILABLE, PlaylistState, StateStore
 from src.utils import spotdl_command, spotdl_python
 
 SPOTDL_RUNNER = Path(__file__).with_name("spotdl_runner.py")
@@ -17,7 +18,8 @@ SONGS_MARKER = "@@MULTIMP3_SONGS@@"
 # spotdl's output template per kind of link. The leading number is what lets a
 # file be matched back to its track: list position for playlists, the album's
 # own track number for albums. Artist pages and single tracks have no number,
-# so those are matched by name.
+# so those are matched by name. Numbered files are renamed "(0001) Title.mp3"
+# once the record has them (src/tidy.py); spotdl only ever writes new ones.
 OUTPUT_TEMPLATES = {
     "playlist": "{list-name}/{list-position} {title} - {artists}.{output-ext}",
     "album": "{list-name}/{track-number} {title} - {artists}.{output-ext}",
@@ -25,7 +27,7 @@ OUTPUT_TEMPLATES = {
     "track": "{title}/{title} - {artists}.{output-ext}",
 }
 _KIND_RE = re.compile(r"/(playlist|album|artist|track)/")
-_LEADING_NUMBER = re.compile(r"^\s*\d+\s+")
+_LEADING_NUMBER = re.compile(r"^\s*\(?\d+\)?\s+")
 
 
 def link_kind(link: str) -> str:
@@ -87,7 +89,10 @@ class SpotifyDownloader(BaseDownloader):
         # -I: run isolated. Otherwise Python puts this folder first on the
         # import path, and spotdl's own `import soundcloud` finds our
         # soundcloud.py instead of its library — it died on startup that way.
-        head = [python, "-I", str(SPOTDL_RUNNER)] if python else [spotdl]
+        # -X utf8: -I also ignores PYTHONIOENCODING, so on Windows the song
+        # list came through in cp1252 and was read as UTF-8 — "Inéz" was
+        # recorded as "In�z", which tagging would then have written into the file.
+        head = [python, "-I", "-X", "utf8", str(SPOTDL_RUNNER)] if python else [spotdl]
         args = ["--save-errors", str(errors_file)]
         if self.client_id and self.client_secret:
             args += ["--client-id", self.client_id, "--client-secret", self.client_secret]
@@ -176,14 +181,13 @@ class SpotifyDownloader(BaseDownloader):
 
     def match_files(self, folder: str, tracks: list[dict[str, Any]]) -> dict[str, Path]:
         """Which file on disk belongs to which track: by the number in the
-        filename where there is one, by "title - artists" where there isn't."""
+        filename (when the name fits the title) where there is one, by
+        "title - artists" where there isn't."""
         if not folder:
             return {}
         directory = self.output_dir / folder
         if any(t.get("file_index") is not None for t in tracks):
-            by_number = index_files(directory)
-            return {t["key"]: by_number[t["file_index"]] for t in tracks
-                    if t.get("file_index") in by_number}
+            return tidy.match_files(directory, tracks, number_key="file_index")
         by_name: dict[str, Path] = {}
         try:
             for p in directory.iterdir():

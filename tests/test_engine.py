@@ -121,7 +121,7 @@ def test_downloads_everything_and_records_it(tmp_path):
     assert result.code == CODE_OK
     s = store.open("soundcloud", LINK).summary()
     assert (s["done"], s["total"]) == (5, 5)
-    assert (tmp_path / "Test Set" / "0003 U - T3.mp3").is_file()
+    assert (tmp_path / "Test Set" / "(0003) T3.mp3").is_file()
 
 
 def test_rate_limited_track_is_retried_not_failed(tmp_path):
@@ -170,7 +170,7 @@ def test_second_run_only_fetches_what_is_left(tmp_path):
 def test_deleted_file_is_fetched_again(tmp_path):
     engine, _ = make_engine(tmp_path, FakeYdl(tmp_path, {}))
     engine.run([LINK])
-    (tmp_path / "Test Set" / "0004 U - T4.mp3").unlink()
+    (tmp_path / "Test Set" / "(0004) T4.mp3").unlink()
 
     again = FakeYdl(tmp_path, {})
     engine2, _ = make_engine(tmp_path, again)
@@ -194,7 +194,7 @@ def test_reset_keeps_old_file_when_redownload_is_cancelled(tmp_path):
     # starts, so a cancelled re-download after a reset used to lose it.
     engine, _ = make_engine(tmp_path, FakeYdl(tmp_path, {}))
     engine.run([LINK])
-    old = tmp_path / "Test Set" / "0002 U - T2.mp3"
+    old = tmp_path / "Test Set" / "(0002) T2.mp3"
     old.write_bytes(b"the original")
     StateStore(tmp_path).reset()
 
@@ -221,13 +221,31 @@ def test_reset_keeps_old_file_when_redownload_is_cancelled(tmp_path):
 def test_successful_redownload_replaces_old_file(tmp_path):
     engine, _ = make_engine(tmp_path, FakeYdl(tmp_path, {}))
     engine.run([LINK])
-    old = tmp_path / "Test Set" / "0001 U - T1.mp3"
+    old = tmp_path / "Test Set" / "(0001) T1.mp3"
     old.write_bytes(b"stale")
     StateStore(tmp_path).reset()
 
     engine2, _ = make_engine(tmp_path, FakeYdl(tmp_path, {}))
     engine2.run([LINK])
-    assert old.read_bytes() == b"mp3"
+    assert old.read_bytes().endswith(b"mp3")             # tagged, so ID3 comes first
+
+
+def test_redownload_under_a_new_name_replaces_the_old_copy(tmp_path):
+    # Files from before "(0001) Title" naming: after a reset, the fresh copy
+    # takes the old one's place rather than sitting next to it.
+    engine, store = make_engine(tmp_path, FakeYdl(tmp_path, {}))
+    engine.run([LINK])
+    st = StateStore(tmp_path).open("soundcloud", LINK)
+    new = tmp_path / "Test Set" / "(0001) T1.mp3"
+    old = new.with_name("0001 U - T1.mp3")
+    new.rename(old)
+    st.note("1", file=old)
+    st.save()
+    StateStore(tmp_path).reset()
+
+    engine2, _ = make_engine(tmp_path, FakeYdl(tmp_path, {}))
+    engine2.run([LINK])
+    assert new.is_file() and not old.exists()
 
 
 def test_track_in_two_playlists_is_downloaded_once_and_retagged(tmp_path):
@@ -247,15 +265,15 @@ def test_track_in_two_playlists_is_downloaded_once_and_retagged(tmp_path):
     fake = FakeYdl(tmp_path, {})
     engine2, store2 = make_engine(tmp_path, fake)
     engine2.done_index = DoneIndex(StateStore(tmp_path))
-    engine2.p.tags_from_playlist = True
     engine2._resolve = lambda pl: (second, "Second Set")      # type: ignore[method-assign]
     [result] = engine2.run([other])
     assert result.code == CODE_OK
     assert sorted(fake.calls) == ["21", "22"]                 # "5" was copied, not fetched
-    copied = tmp_path / "Second Set" / "0001 U - T5.mp3"
+    copied = tmp_path / "Second Set" / "(0001) T5.mp3"
     assert copied.is_file()
     tags = ID3(copied)
-    assert str(tags["TRCK"]) == "1"
+    assert str(tags["TRCK"]) == "1" and str(tags["TALB"]) == "Second Set"
+    assert str(tags["TSOT"]) == "(0001) T5" and str(tags["TIT2"]) == "T5"
     assert store2.open("soundcloud", other).track("5")["status"] == DONE
 
 
@@ -270,7 +288,59 @@ def test_first_sight_imports_legacy_archive_and_existing_files(tmp_path):
     engine, _ = make_engine(tmp_path, fake)
     engine.run([LINK])
     assert sorted(fake.calls) == ["4", "5"]
+    assert (tmp_path / "Test Set" / "(0003) T3.mp3").read_bytes() == b"x"   # renamed, kept
 
+
+def test_first_sight_ignores_a_numbered_file_named_after_another_song(tmp_path):
+    # The playlist changed since the file was downloaded: #3 is a different
+    # song now. Number-only matching would have retitled the old file as T3.
+    (tmp_path / "Test Set").mkdir()
+    stray = tmp_path / "Test Set" / "0003 old - Something Else.mp3"
+    stray.write_bytes(b"x")
+    import os
+    import time as _time
+    os.utime(stray, (_time.time() - 3600, _time.time() - 3600))
+
+    fake = FakeYdl(tmp_path, {})
+    engine, _ = make_engine(tmp_path, fake)
+    engine.run([LINK])
+    assert "3" in fake.calls
+    assert stray.is_file()                                # first sight: left alone
+
+    engine2, _ = make_engine(tmp_path, FakeYdl(tmp_path, {}))
+    engine2.run([LINK])                                   # next run: it isn't any track's
+    assert not stray.exists()
+    assert (tmp_path / "_removed" / "Test Set" / stray.name).read_bytes() == b"x"
+
+
+def test_removed_song_moves_to_removed_folder_and_comes_back(tmp_path):
+    engine, _ = make_engine(tmp_path, FakeYdl(tmp_path, {}))
+    engine.run([LINK])
+
+    without_3 = playlist_info(5)
+    del without_3["entries"][2]                           # T3 left the playlist
+    fake = FakeYdl(tmp_path, {})
+    engine2, store2 = make_engine(tmp_path, fake)
+    engine2._resolve = lambda pl: (without_3, "Test Set")     # type: ignore[method-assign]
+    engine2.run([LINK])
+    folder = tmp_path / "Test Set"
+    assert fake.calls == []
+    assert (tmp_path / "_removed" / "Test Set" / "(0003) T3.mp3").is_file()
+    # Everything after it moved up a place, files included.
+    assert sorted(p.name for p in folder.glob("*.mp3")) == [
+        "(0001) T1.mp3", "(0002) T2.mp3", "(0003) T4.mp3", "(0004) T5.mp3"]
+    assert store2.open("soundcloud", LINK).summary()["removed"] == 1
+
+    back = playlist_info(5)
+    back["entries"].append(back["entries"].pop(2))          # re-added, at the end
+    fake3 = FakeYdl(tmp_path, {})
+    engine3, store3 = make_engine(tmp_path, fake3)
+    engine3._resolve = lambda pl: (back, "Test Set")         # type: ignore[method-assign]
+    engine3.run([LINK])
+    assert fake3.calls == []                                 # restored, not fetched
+    assert (folder / "(0005) T3.mp3").is_file()
+    assert not list((tmp_path / "_removed" / "Test Set").glob("*.mp3"))
+    assert store3.open("soundcloud", LINK).summary()["removed"] == 0
 
 def test_cancel_before_start_leaves_everything_pending(tmp_path):
     cancel = threading.Event()

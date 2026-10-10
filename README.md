@@ -143,9 +143,10 @@ Ctrl-C stops cleanly: finished tracks are saved and the rest stay to do.
 
 ```
 downloads/
-├── My Spotify Playlist/01 Song - Artist.mp3
-├── My YouTube Playlist/01 Uploader - Video Title.mp3
-├── My SoundCloud Set/0001 Uploader - Track.mp3
+├── My Spotify Playlist/(0001) Song.mp3
+├── My YouTube Playlist/(0001) Song.mp3
+├── My SoundCloud Set/(0001) Song.mp3
+├── _removed/     # songs that left their source playlist (moved here, not deleted)
 ├── .state/       # progress records: one JSON file per playlist
 ├── .metadata/    # playlist info
 ├── .icons/       # cover art
@@ -156,14 +157,28 @@ downloads/
 └── spotdl.log    # CLI log
 ```
 
-| Provider | Naming template |
-|----------|-----------------|
-| Spotify playlist | `{list-name}/{list-position} {title} - {artists}.mp3` |
-| Spotify album | `{list-name}/{track-number} {title} - {artists}.mp3` |
-| YouTube | `%(playlist_title)s/%(playlist_index)02d %(uploader)s - %(title)s.mp3` |
-| SoundCloud | `%(playlist)s/%(playlist_index)04d %(uploader)s - %(title)s.mp3` |
+Every file is named `(position) Song.mp3`: the playlist position (an album's track number for Spotify albums), then the song's name. Spotify artist pages and single tracks have no position and keep spotdl's `Song - Artist.mp3`. Folder names are the ones yt-dlp and spotdl have always produced.
 
-SoundCloud files are tagged with the playlist as album and the position as track number, so a playlist stays together when you import it into Apple Music (for example with CopyTrans).
+---
+
+## Apple Music (CopyTrans)
+
+The files are made to be copied onto an iPhone and played in Apple Music:
+
+- **Title:** just the song's name. No uploader in front, and no `(Official Video)`, `[FREE DL]` or `.wav` left over from the upload. An `Artist - Song` upload title is split, and the artist goes in the artist tag.
+- **Sort title:** `(0001) Song`. Apple Music sorts by this, so a playlist sorted by title plays in playlist order, while the title you see stays clean.
+- **Album:** for SoundCloud and YouTube, the playlist is the album (with one album artist, so it doesn't split up), and the position is the track number. Spotify songs keep their real album and artwork.
+- **Volume:** every track is evened out to −14 LUFS, so a loud club master doesn't follow a quiet upload at twice the volume. It's done the way mp3gain does it, by adjusting the MP3's own gain values in 1.5 dB steps: **lossless**, nothing is re-encoded, and it works in every player (Apple Music ignores ReplayGain tags, and Sound Check isn't run on files copied over with CopyTrans). The change is recorded in a `MULTIMP3_GAIN` tag and checked with ffmpeg before the file is replaced. Set `LEVEL_VOLUME=0` to turn it off, `LEVEL_TARGET_LUFS` to change the target.
+
+New downloads arrive finished. Files already on disk are renamed the next time their playlist runs, and are tagged and levelled in the background. That's a one-off for the library, at well under a second a song. **Stop** leaves the rest for the next run.
+
+Songs already on your iPhone keep their old tags. To get the clean titles and the order there, remove the playlist on the phone and add the folder again.
+
+**Format:** everything is MP3, because that's what's known to work with CopyTrans and Apple Music. AAC (`.m4a`) would be better quality for the same size, since SoundCloud and YouTube both serve AAC natively and MP3 means converting it. It could be offered later once it's been tested end to end on the phone.
+
+### Songs removed from a playlist
+
+When a song disappears from its Spotify, YouTube or SoundCloud playlist, its file is moved to `downloads/_removed/<playlist>/` rather than left in the folder or deleted. That way the folder always holds exactly the playlist. If the song is added back, it's moved back with no download. Numbered files that don't belong to any song in the playlist (removals from before this existed) are moved there too. Anything that even looks like a current track is left alone.
 
 ---
 
@@ -215,7 +230,7 @@ Every playlist has a record at `downloads/.state/<provider>/<playlist>.json` lis
 
 ## Maintenance
 
-- **yt-dlp** breaks whenever a site changes, and fixes ship within days. *System → Update yt-dlp* upgrades it for the app and for spotdl's environment; restart the app afterwards. Everything else is pinned exactly by `uv.lock` (app) and `requirements-spotdl.txt` (spotdl).
+- **yt-dlp** breaks whenever a site changes, and fixes ship within days. *System → Update yt-dlp* upgrades it for the app and for spotdl's environment; restart the app afterwards. The app watches for this: if a run fails far more tracks than that provider usually does (and the errors look like extraction failures), the run summary, the notification and the System tab suggest updating, and say how old the installed yt-dlp is. Everything else is pinned exactly by `uv.lock` (app) and `requirements-spotdl.txt` (spotdl).
 - **Cleanup** (*System → Clean up leftovers*, also run at startup) removes finished jobs' input files, old spotdl error lists and interrupted downloads. Music and records are never touched.
 
 ---
@@ -232,6 +247,9 @@ Every playlist has a record at `downloads/.state/<provider>/<playlist>.json` lis
 │   ├── state.py                  # per-playlist progress records
 │   ├── ratelimit.py              # shared adaptive rate limiter
 │   ├── dedupe.py                 # download each track once, copy into other playlists
+│   ├── tidy.py                   # "(0001) Song.mp3", clean tags, _removed/, background finishing
+│   ├── loudness.py               # lossless MP3 volume levelling (global gain)
+│   ├── health.py                 # failure trends → "update yt-dlp" advice
 │   ├── links.py                  # links.txt ↔ the Links tab, keeping its shape
 │   ├── settings.py               # speed presets + environment overrides
 │   ├── event_bus.py              # replayable event log behind the live stream

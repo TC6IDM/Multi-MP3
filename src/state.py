@@ -34,7 +34,8 @@ UNAVAILABLE = "unavailable"
 STATUSES = (PENDING, DONE, FAILED, UNAVAILABLE)
 
 _VERSION = 1
-_INDEX_RE = re.compile(r"^\s*(\d+)")
+# "(0001) Title.mp3" now; "0001 Uploader - Title.mp3" from earlier versions.
+_INDEX_RE = re.compile(r"^\s*\(?(\d+)\)?")
 
 
 def playlist_key(provider: str, link: str) -> str:
@@ -84,20 +85,29 @@ def index_files(folder: Path) -> dict[int, Path]:
     """Map each leading track number in a playlist folder to its MP3.
 
     Every provider names files "<position> …", so the number is how existing
-    downloads are matched to playlist entries when there is no record yet.
+    downloads are matched to playlist entries when there is no record yet. Two
+    files with one number (spotdl's fresh "005 …" next to a leftover) resolve
+    to the newer one.
     """
-    found: dict[int, Path] = {}
+    found: dict[int, tuple[float, Path]] = {}
     try:
         entries = list(folder.iterdir())
     except OSError:
-        return found
+        return {}
     for p in entries:
-        if p.suffix.lower() != ".mp3" or not p.is_file():
+        if p.suffix.lower() != ".mp3" or p.name.startswith("."):
             continue
         m = _INDEX_RE.match(p.name)
-        if m:
-            found.setdefault(int(m.group(1)), p)
-    return found
+        if not m:
+            continue
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            continue
+        n = int(m.group(1))
+        if n not in found or mtime > found[n][0]:
+            found[n] = (mtime, p)
+    return {n: p for n, (_, p) in found.items()}
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -176,6 +186,20 @@ class PlaylistState:
         rel = track.get("file") or ""
         return self.root / rel if rel else None
 
+    def owner_of(self, path: Path) -> str | None:
+        """The track whose file this is, if any."""
+        rel = self._rel(path)
+        with self._lock:
+            for k, t in self.data["tracks"].items():
+                if t.get("file") == rel:
+                    return str(k)
+        return None
+
+    def removed(self) -> dict[str, dict[str, Any]]:
+        """Tracks that left the source playlist, with where their file went."""
+        with self._lock:
+            return {k: dict(t) for k, t in (self.data.get("removed") or {}).items()}
+
     def is_done(self, key: str) -> bool:
         """Done, and (when we know which file it is) that file still exists."""
         t = self.track(key)
@@ -199,6 +223,7 @@ class PlaylistState:
                 "unavailable": counts[UNAVAILABLE], "pending": counts[PENDING],
                 # "left" is what a re-run would actually try to fetch.
                 "left": counts[PENDING] + counts[FAILED],
+                "removed": len(self.data.get("removed") or {}),
                 "updated_at": self.data.get("updated_at"),
                 "reset_at": self.data.get("reset_at"),
             }
@@ -212,23 +237,33 @@ class PlaylistState:
                     self.data[k] = v
             self.data["updated_at"] = time.time()
 
-    def sync_tracks(self, entries: Iterable[dict[str, Any]]) -> None:
-        """Make the record match the playlist as it is now.
+    def sync_tracks(self, entries: Iterable[dict[str, Any]]) -> list[str]:
+        """Make the record match the playlist as it is now. Returns the keys
+        of tracks that left it.
 
-        Status carries over for tracks still in the playlist; tracks that left
-        the playlist are dropped (their files stay on disk). Titles only ever
-        improve — a resolve that comes back without them (SoundCloud stubs)
-        keeps the ones a previous run learned.
+        Status carries over for tracks still in the playlist. A track that left
+        moves to the record's "removed" list along with its file (which the tidy
+        step moves into _removed/), and comes straight back — file and all, no
+        download — if it's added again. Titles only ever improve: a resolve
+        that comes back without them (SoundCloud stubs) keeps the ones a
+        previous run learned.
         """
+        entries = list(entries)
         with self._lock:
             old = self.data["tracks"]
+            if not entries and old:
+                # A playlist doesn't empty itself between runs nearly as often
+                # as a resolve comes back blank; don't move a whole folder for it.
+                return []
+            removed: dict[str, dict[str, Any]] = self.data.setdefault("removed", {})
             fresh: dict[str, dict[str, Any]] = {}
             for e in entries:
                 key = str(e["key"])
-                t = dict(old.get(key) or {
+                t = dict(old.get(key) or removed.pop(key, None) or {
                     "status": PENDING, "file": "", "error": "", "attempts": 0,
                     "title": "", "artists": [], "updated_at": None,
                 })
+                t.pop("removed_at", None)
                 t["index"] = e.get("index")
                 if e.get("id"):
                     t["id"] = str(e["id"])
@@ -246,12 +281,22 @@ class PlaylistState:
                     if e.get(extra) is not None:
                         t[extra] = e[extra]
                 fresh[key] = t
+            now = time.time()
+            gone = [k for k in old if k not in fresh]
+            for k in gone:
+                # Only tracks with something on disk are worth remembering.
+                if old[k].get("file"):
+                    removed[k] = dict(old[k], removed_at=now)
             self.data["tracks"] = fresh
             self.data["total"] = len(fresh)
-            self.data["updated_at"] = time.time()
+            self.data["updated_at"] = now
+            return gone
 
     def mark(self, key: str, status: str, *, file: Path | str | None = None,
-             error: str | None = None, title: str | None = None, save: bool = True) -> None:
+             error: str | None = None, title: str | None = None, save: bool = True,
+             **extra: Any) -> None:
+        """Set a track's status. `extra` fields (e.g. tagged=, gain=) are
+        stored alongside, for a file that was finished before being recorded."""
         if status not in STATUSES:
             raise ValueError(f"unknown status {status!r}")
         with self._lock:
@@ -263,6 +308,9 @@ class PlaylistState:
                 t["error"] = ""
                 if file:
                     t["file"] = self._rel(file)
+                    # A new file: its tags and volume haven't been seen to yet.
+                    t.pop("tagged", None)
+                    t.pop("gain", None)
             elif status == FAILED:
                 t["attempts"] = int(t.get("attempts") or 0) + 1
                 t["error"] = (error or "Download failed")[:300]
@@ -272,11 +320,30 @@ class PlaylistState:
                 t["error"] = error[:300]
             if title:
                 t["title"] = title
+            t.update(extra)
             now = time.time()
             t["updated_at"] = now
             self.data["updated_at"] = now
             if save:
                 self.save()
+
+    def note(self, key: str, **fields: Any) -> None:
+        """Set bookkeeping fields on a track (no status change, not saved).
+
+        `file=` re-points the track at a renamed or moved file.
+        """
+        with self._lock:
+            t = self.data["tracks"].get(key)
+            if t is None:
+                return
+            for k, v in fields.items():
+                t[k] = self._rel(v) if k == "file" and v else v
+
+    def note_removed(self, key: str, file: Path) -> None:
+        with self._lock:
+            t = (self.data.get("removed") or {}).get(key)
+            if t is not None:
+                t["file"] = self._rel(file)
 
     def heal(self) -> int:
         """Send done tracks whose file has since been deleted back to pending.
@@ -302,11 +369,14 @@ class PlaylistState:
         The record itself is kept (with reset_at stamped) rather than deleted:
         a missing record means "first sight" and would be re-seeded from the
         MP3s on disk, quietly undoing the reset. Existing files stay where they
-        are and are overwritten track by track as the re-download succeeds.
+        are and are overwritten track by track as the re-download succeeds —
+        which is why each track still remembers its old file: a replacement
+        under a new name can then take the old copy's place instead of
+        leaving it behind as a duplicate.
         """
         with self._lock:
             for t in self.data["tracks"].values():
-                t.update(status=PENDING, file="", error="", attempts=0, updated_at=None)
+                t.update(status=PENDING, error="", attempts=0, updated_at=None)
             now = time.time()
             self.data["reset_at"] = now
             self.data["updated_at"] = now
@@ -373,6 +443,16 @@ class StateStore:
             if not st.is_new:
                 states.append(st)
         return states
+
+    def shares_folder(self, st: PlaylistState) -> bool:
+        """Does another playlist's record use this playlist's folder too?
+        (Two YouTube playlists can share a title.) Tidying then leaves files it
+        doesn't know about alone — they may be the other playlist's."""
+        folder = st.folder.casefold()
+        if not folder:
+            return False
+        return any(o.folder.casefold() == folder and (o.provider, o.key) != (st.provider, st.key)
+                   for o in self.all())
 
     def reset(self, targets: list[tuple[str, str]] | None = None) -> int:
         """Reset the given (provider, key) records, or every record. Returns how many."""

@@ -5,7 +5,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from src.dedupe import DoneIndex, copy_track, renumber
+from src import health
+from src.dedupe import DoneIndex, copy_track
 from src.downloaders.soundcloud import SoundCloudDownloader
 from src.downloaders.spotify import SpotifyDownloader, link_kind
 from src.downloaders.youtube import YouTubeDownloader
@@ -14,6 +15,7 @@ from src.models import CODE_CANCELLED, CODE_FAILED, CODE_OK, CODE_PARTIAL, LinkR
 from src.ratelimit import AdaptiveRateLimiter
 from src.settings import DEFAULT_SPEED, env_rate_override, lane
 from src.state import DONE, FAILED, UNAVAILABLE, PlaylistState, StateStore
+from src.tidy import Finisher, plan_for, replace_superseded, tidy_playlist
 from src.tui import DownloadProgress
 from src.utils import read_links
 
@@ -48,8 +50,14 @@ class Coordinator:
         # Every track already downloaded anywhere, so a song that's in several
         # playlists is fetched once and copied into the rest.
         self.done_index = DoneIndex(self.store)
+        # Tags and volume, in the background while the lanes download.
+        self.finisher = Finisher(logger, self.cancel)
         self._spotify: SpotifyDownloader | None = None
         self._spotify_lock = threading.Lock()
+        self._spotify_downloaded = 0
+        self._spotify_failures: list[str] = []
+        # Suggestions for after the run (e.g. "update yt-dlp"), for the UI.
+        self.advice: list[str] = []
 
     def _get_spotify(self) -> SpotifyDownloader:
         with self._spotify_lock:
@@ -83,7 +91,7 @@ class Coordinator:
         self.tui.provider_status(provider, "rate", {"rate": round(limiter.rate, 1),
                                                     "workers": cfg.workers})
         engine = YtDlpEngine(profile, self.output_dir, self.logger, self.store, self.tui, self.cancel,
-                             done_index=self.done_index)
+                             done_index=self.done_index, finisher=self.finisher)
         return engine.run(links)
 
     # ── Spotify ──────────────────────────────────────────────────────
@@ -108,6 +116,7 @@ class Coordinator:
                     self.logger.error(f"💥 spotify crashed on {link}: {e}")
                     results.append(LinkResult("spotify", link, link, CODE_FAILED))
                 self.tui.advance(task_name)
+        health.record(self.output_dir, "spotify", self._spotify_downloaded, self._spotify_failures)
         return results
 
     def _download_spotify_link(self, link: str, index: int, total: int) -> LinkResult:
@@ -136,19 +145,25 @@ class Coordinator:
         self.tui.link_started(provider, link, short, 0)
 
         ctx: dict[str, Any] = {}
+        run_started = time.time()
 
         def on_songs(songs: list[dict[str, Any]]) -> list[str]:
             tracks = downloader.tracks_from_songs(songs, kind)
             name = downloader.list_name(songs, kind, short)
             folder = downloader.folder_for(songs, kind)
             st = downloader.prepare_state(self.store, link, name, folder, tracks)
-            copied = self._copy_spotify_duplicates(st, folder, tracks, kind)
+            tidied = tidy_playlist(st, since=run_started, shared_folder=self.store.shares_folder(st),
+                                   on_move=self.done_index.moved, logger=self.logger)
+            copied = self._copy_spotify_duplicates(st, folder)
             moved = downloader.set_aside_stale(st, folder, tracks)
-            ctx.update(st=st, folder=folder, tracks=tracks, name=name)
+            todo = [t["key"] for t in st.ordered() if t.get("status") not in (DONE, UNAVAILABLE)]
+            ctx.update(st=st, folder=folder, tracks=tracks, name=name, todo=todo)
             downloader.save_cover(songs[0].get("cover_url") if songs else None, folder)
 
             s = st.summary()
             note = f" ({copied} copied from other playlists)" if copied else ""
+            if tidied.note():
+                note += f" ({tidied.note()})"
             self.logger.info(f"📋 Spotify: {name} — {s['total']} tracks, {s['done']} done, "
                              f"{s['left']} to fetch{note}")
             if moved:
@@ -158,7 +173,6 @@ class Coordinator:
             self.tui.link_metadata(provider, link, self._ui_tracks(st))
             return downloader.skip_urls(st)
 
-        run_started = time.time()
         code, errors_file = 1, None
         try:
             code, errors_file = downloader.download(link, on_progress=forward, on_songs=on_songs)
@@ -189,11 +203,16 @@ class Coordinator:
             if restored:
                 self.logger.info(f"📦 Put back {restored} old cop{'y' if restored == 1 else 'ies'} "
                                  f"whose re-download didn't finish")
+            # spotdl's fresh "005 Title - Artist.mp3" files get their final names.
+            tidy_playlist(st, since=run_started, shared_folder=self.store.shares_folder(st),
+                          on_move=self.done_index.moved, logger=self.logger)
             for t in st.ordered():
                 if t.get("status") == DONE and t.get("id"):
                     path = st.file_path(t)
                     if path is not None:
                         self.done_index.add(provider, t["id"], path)
+            self._count_spotify_health(st, ctx.get("todo") or [])
+            self.finisher.submit_playlist(st)
             s = st.summary()
             if s["left"] == 0:
                 final = CODE_OK
@@ -210,15 +229,13 @@ class Coordinator:
         self.tui.link_complete(provider, link, name, final)
         return LinkResult(provider, link, name, final, index, total)
 
-    def _copy_spotify_duplicates(self, st: PlaylistState, folder: str,
-                                 tracks: list[dict[str, Any]], kind: str) -> int:
+    def _copy_spotify_duplicates(self, st: PlaylistState, folder: str) -> int:
         """Copy in tracks another playlist already downloaded, so spotdl skips
-        them. spotdl tags songs with their real album, so the copy needs no
-        retagging — only the position at the front of the filename changes."""
+        them. spotdl tags songs with their real album, so only the name and
+        the sort title (this playlist's position) change."""
         if not folder:
             return 0
         target_dir = self.output_dir / folder
-        width = len(str(max((t["index"] for t in tracks), default=0))) if kind == "playlist" else 2
         copied = 0
         for t in st.ordered():
             if t.get("status") in (DONE, UNAVAILABLE) or not t.get("id"):
@@ -226,18 +243,33 @@ class Coordinator:
             src = self.done_index.find("spotify", t["id"], not_in=target_dir)
             if src is None:
                 continue
-            number = t.get("file_index")
-            name = renumber(src.name, number, width if number is not None else 0)
+            plan = plan_for(st, t)
             try:
-                dst = copy_track(src, target_dir / name)
+                dst = copy_track(src, target_dir / (plan.name or src.name), plan.tags)
             except OSError as e:
                 self.logger.debug(f"Couldn't copy {src.name}: {e}")
                 continue
-            st.mark(t["key"], DONE, file=dst, save=False)
+            replace_superseded(st, t["key"], dst)
+            st.mark(t["key"], DONE, file=dst, save=False, tagged=plan.sig)
             copied += 1
         if copied:
             st.save()
         return copied
+
+    def _count_spotify_health(self, st: PlaylistState, todo: list[str]) -> None:
+        """This link's tracks that spotdl was asked for: fetched, or failed."""
+        downloaded, failures = 0, []
+        for key in todo:
+            t = st.track(key)
+            if t is None:
+                continue
+            if t.get("status") == DONE:
+                downloaded += 1
+            elif t.get("status") == FAILED:
+                failures.append(str(t.get("error") or "Download failed"))
+        with self._spotify_lock:
+            self._spotify_downloaded += downloaded
+            self._spotify_failures.extend(failures)
 
     @staticmethod
     def _ui_tracks(st: PlaylistState) -> list[dict[str, Any]]:
@@ -365,10 +397,33 @@ class Coordinator:
                         # is recorded and everything else stays "to do".
                         self.logger.warning("⏹️ Stopping — finishing up and saving progress...")
                         self.cancel.set()
+                # Tags and volume still being written for earlier files.
+                while True:
+                    try:
+                        self.finisher.close()
+                        break
+                    except KeyboardInterrupt:
+                        self.cancel.set()
+        for st in self.store.opened():
+            st.save()
 
         self._log_summary()
+        self._check_health([p for p, _ in active])
         self.logger.info(f"🏁 All providers complete (exit: {exit_code})")
         return exit_code
+
+    def _check_health(self, providers: list[str]) -> None:
+        """Suggest a yt-dlp update when tracks failed far more than usual."""
+        try:
+            from src.maintenance import versions
+            v = versions()
+            found = health.assess(self.output_dir, v.get("yt_dlp"), v.get("spotdl_yt_dlp"), providers)
+        except Exception as e:
+            self.logger.debug(f"Health check failed: {e}")
+            return
+        for item in found:
+            self.logger.warning(f"🩺 {item['message']}")
+            self.advice.append(item["message"])
 
     def totals(self) -> dict[str, int]:
         """Track counts across every playlist this run touched."""

@@ -2,24 +2,22 @@
 
 A track already downloaded for one playlist is *copied* into the next playlist
 that contains it, instead of being fetched again — no request, no rate-limit
-budget, no waiting. It is a copy rather than a hard link on purpose: SoundCloud
-and YouTube files carry the playlist in their tags (album = playlist name,
-track number = position), so each playlist's copy gets its own tags. A hard
-link would share one set of tags between both playlists, and whichever was
-tagged last would be wrong in the other when imported into Apple Music.
+budget, no waiting. It is a copy rather than a hard link on purpose: every file
+carries its playlist position in its tags (the sort title, and for SoundCloud
+and YouTube the album and track number too), so each playlist's copy gets its
+own tags. A hard link would share one set of tags between both playlists, and
+whichever was tagged last would be wrong in the other when imported into Apple
+Music.
 """
 
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import threading
 from pathlib import Path
 
 from src.state import DONE, StateStore
-
-_LEADING_NUMBER = re.compile(r"^\s*\d+\s*")
 
 
 class DoneIndex:
@@ -53,48 +51,32 @@ class DoneIndex:
             with self._lock:
                 self._files.setdefault((provider, str(track_id)), path)
 
+    def moved(self, old: Path, new: Path) -> None:
+        """Follow a file that was renamed or moved (tidying, _removed/)."""
+        with self._lock:
+            for k, p in self._files.items():
+                if p == old:
+                    self._files[k] = new
+
     def __len__(self) -> int:
         return len(self._files)
 
 
-def renumber(name: str, number: int | None, width: int) -> str:
-    """The same filename with this playlist's position in front of it."""
-    rest = _LEADING_NUMBER.sub("", name, count=1)
-    if number is None or width <= 0:
-        return rest
-    return f"{number:0{width}d} {rest}"
-
-
-def copy_track(src: Path, dst: Path, *, album: str | None = None,
-               album_artist: str | None = None, track: int | None = None) -> Path:
-    """Copy a downloaded track into place, retagging it for its new playlist.
+def copy_track(src: Path, dst: Path, tags: dict[str, str] | None = None) -> Path:
+    """Copy a downloaded track into place, retagged for its new playlist.
 
     Written to a temporary name and swapped in, so an existing (stale) file at
     the destination is only replaced by a complete copy.
     """
+    from src.tidy import write_tags
+
     dst.parent.mkdir(parents=True, exist_ok=True)
     tmp = dst.with_name(f".{dst.name}.copying")
     shutil.copy2(src, tmp)
     try:
-        if src.suffix.lower() == ".mp3" and (album or album_artist or track):
-            _retag(tmp, album=album, album_artist=album_artist, track=track)
+        if src.suffix.lower() == ".mp3" and tags:
+            write_tags(tmp, tags)
         os.replace(tmp, dst)
     finally:
         tmp.unlink(missing_ok=True)
     return dst
-
-
-def _retag(path: Path, *, album: str | None, album_artist: str | None, track: int | None) -> None:
-    from mutagen.id3 import ID3, TALB, TPE2, TRCK, ID3NoHeaderError
-
-    try:
-        tags = ID3(path)
-    except ID3NoHeaderError:
-        tags = ID3()
-    if album:
-        tags.setall("TALB", [TALB(encoding=3, text=album)])
-    if album_artist:
-        tags.setall("TPE2", [TPE2(encoding=3, text=album_artist)])
-    if track:
-        tags.setall("TRCK", [TRCK(encoding=3, text=str(track))])
-    tags.save(path)

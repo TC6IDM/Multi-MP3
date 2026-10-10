@@ -293,6 +293,8 @@ input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); 
   font-size: 0.88rem;
 }
 .notice .icon { color: var(--warn); margin-top: 1px; }
+#run-advice:not(:empty) { margin-bottom: 20px; }
+#sys-health:not(:empty) { margin-bottom: 16px; }
 
 /* ── Live ── */
 

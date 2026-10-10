@@ -39,7 +39,8 @@ def main() -> None:
     def get_simple_songs_and_ask(*args, **kwargs):
         songs = original(*args, **kwargs)
         listing = [{f: getattr(s, f, None) for f in FIELDS} for s in songs]
-        sys.stdout.write(MARKER + " " + json.dumps(listing, ensure_ascii=False) + "\n")
+        # ASCII-escaped, so the line survives whatever encoding stdout has.
+        sys.stdout.write(MARKER + " " + json.dumps(listing) + "\n")
         sys.stdout.flush()
         try:
             reply = json.loads(sys.stdin.readline() or "{}")

@@ -186,6 +186,27 @@ def test_library_merges_records_with_folders_and_sizes(client):
     assert client.get("/api/covers/..%2F..%2F.env").status_code == 404
 
 
+def test_library_keeps_removed_songs_out_of_the_playlists(client):
+    removed = web_app.DEFAULT_OUTPUT / "_removed" / "My Playlist"
+    removed.mkdir(parents=True)
+    (removed / "(0002) Gone.mp3").write_bytes(b"x" * 10)
+    lib = client.get("/api/library").json()
+    assert "_removed" not in {i["name"] for i in lib["items"]}
+    assert (lib["removed_files"], lib["removed_bytes"]) == (1, 10)
+
+
+def test_system_reports_health_and_levelling(client, monkeypatch):
+    from src import health, maintenance
+    monkeypatch.setattr(maintenance, "versions", lambda: {"yt_dlp": "2026.1.1", "spotdl_yt_dlp": None,
+                                                          "ffmpeg": True})
+    for _ in range(3):
+        health.record(web_app.DEFAULT_OUTPUT, "youtube", 40, [])
+    health.record(web_app.DEFAULT_OUTPUT, "youtube", 10, ["Unable to extract"] * 10)
+    info = client.get("/api/system").json()
+    assert [h["provider"] for h in info["health"]] == ["youtube"]
+    assert info["level"]["enabled"] is True
+
+
 def test_failed_report_and_retry(client):
     _record(client, [DONE, "failed", "unavailable"])
     [group] = client.get("/api/report/failed").json()

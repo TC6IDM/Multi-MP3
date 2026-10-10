@@ -141,6 +141,12 @@ def cleanup(output_dir: Path, busy: bool = False, error_age_days: int = 30) -> d
                 rm(p)
         except OSError:
             pass
+    if not busy:
+        # Half-written temp copies a crash left beside the real file (tagging,
+        # levelling, duplicate copies). The real file was never touched.
+        for pattern in ("*/.*.finishing", "*/.*.copying"):
+            for p in output_dir.glob(pattern):
+                rm(p)
     partial = output_dir / ".partial"
     if not busy and partial.is_dir():
         for p in list(partial.rglob("*")):
