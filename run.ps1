@@ -1,4 +1,7 @@
-param([string]$InputFile = "links.example.txt")
+param(
+    [string]$InputFile = "links.txt",
+    [switch]$Parallel
+)
 
 $ImageName = "playlist-downloader"
 
@@ -12,10 +15,15 @@ $projectPath = (Get-Location).Path
 $linksPath = Join-Path $projectPath $InputFile
 $downloads = Join-Path $projectPath "downloads"
 
+$extraArgs = @()
+if ($Parallel) {
+    $extraArgs += "--parallel"
+}
+
 docker run --rm `
   -v "${projectPath}/.spotdl:/root/.config/spotdl" `
   -v "${linksPath}:/app/input_links.txt:ro" `
   -v "${downloads}:/app/music" `
   -v "${projectPath}/.env:/app/.env:ro" `
   $ImageName `
-  "input_links.txt" "/app/music"
+  "input_links.txt" "/app/music" $extraArgs

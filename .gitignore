@@ -1,7 +1,15 @@
 downloads/
 .env
 /.spotdl/*
-!/.spotdl/config.json
 examplecmd.py
 .venv
+.venv-spotdl
 .vscode
+__pycache__/
+*.pyc
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+*.egg-info/
+# spotipy's token cache, should anything ever write one
+/.cache

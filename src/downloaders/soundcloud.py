@@ -1,155 +1,232 @@
 import json
-import subprocess
-from datetime import datetime
-from pathlib import Path
-from typing import List, Tuple
 import logging
-import re
 import os
+import re
+import time
+import urllib.request
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
-from src.downloaders.base import BaseDownloader
-from src.models import Song, Playlist
+import yt_dlp
+
+from src.downloaders.ytdlp_engine import EngineProfile, YtDlpEngine
+from src.ratelimit import AdaptiveRateLimiter
+from src.settings import Lane, env_int
 
 
-class SoundCloudDownloader(BaseDownloader):
-    def download(self, link: str) -> Tuple[int, Path]:
-        """Download SoundCloud link via scdl CLI."""
-        # errors_file = self.errors_dir / f"scdl-{datetime.now().strftime('%Y%m%d%H%M%S')}.txt"
-        
-        cmd = [
-            "scdl",
-            "-l", link,
-            "--path", str(self.output_dir),
-            "--no-playlist-folder",
-            "--playlist-name-format", "%(playlist)s/%(playlist_index)04d %(uploader)s - %(title)s.%(ext)s",
-            "--onlymp3",
-            "--original-art",
-            "-c",
-            "--debug",
-            "--yt-dlp-args", "--write-info-json --ignore-errors --no-abort-on-error --yes-playlist --embed-thumbnail --audio-quality 1",
+class SoundCloudDownloader:
+    """SoundCloud through the in-process yt-dlp engine.
+
+    This used to shell out to scdl once per playlist. scdl is itself a yt-dlp
+    wrapper, so the engine reproduces its options exactly (format choice, album
+    tags from the playlist, the `%(playlist)s/NNNN uploader - title` layout)
+    while adding what scdl couldn't: one request budget shared across every
+    playlist in the run, and an exact per-track record.
+    """
+
+    # Where SoundCloud's web player hides the anonymous API key: the homepage
+    # links a handful of JS bundles, one of which declares client_id:"...".
+    # Same two patterns the `soundcloud` library uses.
+    _ASSET_SCRIPT_RE = re.compile(r'src="(https://a-v2\.sndcdn\.com/assets/[^"]+\.js)"')
+    _CLIENT_ID_RE = re.compile(r'client_id:"([^"]+)"')
+    _BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+    # A generated id keeps working for days, but re-deriving one is cheap next
+    # to a dead run, so the cache is refreshed daily rather than held forever.
+    CLIENT_ID_TTL = 24 * 3600
+
+    OUTTMPL = "%(playlist)s/%(playlist_index)04d %(uploader)s - %(title)s.%(ext)s"
+
+    def __init__(self, output_dir: Path, logger: logging.Logger) -> None:
+        self.output_dir = output_dir
+        self.logger = logger
+
+    def profile(self, lane: Lane, limiter: AdaptiveRateLimiter) -> EngineProfile:
+        args = [
+            # SoundCloud has been retiring its mp3 transcodings. scdl's
+            # --onlymp3 failed outright on tracks without one; prefer mp3 (no
+            # re-encode) and fall back to the AAC stream, converted below.
+            "-f", "ba[format_id*=mp3]/ba",
+            "--extractor-args", "soundcloud:formats=*_aac,*_mp3",
+            "-x", "--audio-format", "mp3", "--audio-quality", "1",
+            "--embed-metadata", "--embed-thumbnail",
+            "--parse-metadata", "%(playlist)s:%(meta_album)s",
+            "--parse-metadata", "%(playlist_uploader)s:%(meta_album_artist)s",
+            "--parse-metadata", "%(playlist_index)s:%(meta_track)s",
+            "--trim-filenames", "240",
+            # One request in flight per track; the limiter spaces the tracks.
+            "--concurrent-fragments", "1",
+            "--retries", "5",
+            # yt-dlp's own 429 retries would keep knocking on a closed door;
+            # the shared limiter handles rate limits for every worker at once.
+            "--extractor-retries", "0",
         ]
+        # An authenticated session gets far higher rate limits. Optional.
+        auth_token = os.getenv("SOUNDCLOUD_AUTH_TOKEN", "").strip()
+        if auth_token:
+            args += ["--username", "oauth", "--password", auth_token]
+            self.logger.info("🔑 Using SoundCloud auth token")
 
-        name = "scdl"
-        return self._download(name, link, cmd)
+        return EngineProfile(
+            provider="soundcloud", label="SoundCloud", ydl_args=args, outtmpl=self.OUTTMPL,
+            workers=lane.workers, limiter=limiter,
+            max_attempts=env_int("SOUNDCLOUD_MAX_ATTEMPTS", 3),
+            forbidden_is_rate_limit=True, legacy_archive=True, tags_from_playlist=True,
+            before_run=self._seed_client_id, refresh_auth=self._refresh_client_id,
+            backfill=self._backfill_titles,
+        )
 
-        # self.logger.info(f"🔊 scdl: {link.split('?')[0]}")
-        # self.logger.debug(f"📁 Output: {self.output_dir}")
-        # self.logger.debug(f"Command: {' '.join(cmd)}")
-        
-        # env = os.environ.copy()
-        # try:
-        #     proc = subprocess.run(cmd, env=env, cwd=str(self.output_dir),
-        #         capture_output=False, text=True, timeout=3600)
-        #     if proc.returncode == 0:
-        #         if proc.stdout:
-        #             errors_file.write_text(proc.stdout)
-        #         self.logger.info("✅ scdl complete")
-        #     else:
-        #         self.logger.warning(f"scdl exit code: {proc.returncode}")
-        #     return proc.returncode, errors_file
-        # except subprocess.TimeoutExpired:
-        #     self.logger.warning("⏰ scdl timeout (1h)")
-        #     return 1, errors_file
-        # except Exception as e:
-        #     self.logger.error(f"💥 scdl error: {e}")
-        #     return 1, errors_file
+    # ── Engine hooks ─────────────────────────────────────────────────
 
-    def cleanup(self, playlist_name: str) -> List[Song]:
-        """Cleanup metadata/scan missing tracks across playlists."""
-        # Delete root .info.json
-        for infofile in self.output_dir.glob("*.info.json"):
-            self.logger.info(f"🗑️ Deleting root {infofile.name}")
-            infofile.unlink(missing_ok=True)
-        
-        metadata_root = self.output_dir / '.metadata'
-        metadata_root.mkdir(exist_ok=True)
-        all_missing_songs = []
-        
-        for playlist_dir in self.output_dir.iterdir():
-            if not playlist_dir.is_dir() or playlist_dir.name.startswith('.'):
-                continue
+    def _store_client_id(self, engine: YtDlpEngine, client_id: str) -> None:
+        """Hand yt-dlp our client id through its own cache, which is where its
+        SoundCloud extractor looks before scraping soundcloud.com itself."""
+        with yt_dlp.YoutubeDL({"cachedir": str(engine.cachedir), "quiet": True}) as ydl:
+            ydl.cache.store("soundcloud", "client_id", client_id)
 
-            missing_songs = self._cleanup_playlist(playlist_dir, metadata_root)
-            all_missing_songs.extend(missing_songs)
-        
-        self.logger.info(f"🧹 Done! {len(all_missing_songs)} total missing")
-        return all_missing_songs
+    def _seed_client_id(self, engine: YtDlpEngine) -> None:
+        client_id = self._client_id()
+        if client_id:
+            self._store_client_id(engine, client_id)
 
-    def fetch_metadata_image(self, url: str) -> str | None:
-        return "Test"
-    
-    def _cleanup_playlist(self, playlist_dir: Path, metadata_root: Path) -> List[Song]:
-        """Private: cleanup one playlist dir."""
-        playlist_name = playlist_dir.name
-        info_files = list(playlist_dir.glob('*.info.json'))
-        if not info_files:
-            return []
-        
-        playlist_json_path = metadata_root / f'{playlist_name}.json'
-        first_info = info_files[0]
-        first_info.rename(playlist_json_path)
-        
-        try:
-            with playlist_json_path.open('r') as f:
-                playlist_data = json.load(f)
-        except Exception:
-            playlist_data = {}
-        expected_count = playlist_data.get('playlist_count', len(info_files))
-        self.logger.info(f"{playlist_name}: {expected_count} expected")
-        
-        # Scan MP3s for numbers/padding
-        numbers, padding = self._get_padding(playlist_dir)
+    def _refresh_client_id(self, engine: YtDlpEngine) -> bool:
+        client_id = self._client_id(refresh=True)
+        if client_id:
+            self._store_client_id(engine, client_id)
+        return bool(client_id)
 
-        # numbers = []
-        # padding = 0
-        # for p in playlist_dir.iterdir():
-        #     if p.suffix.lower() == '.mp3':
-        #         match = re.match(r'(\d+)', p.stem)
-        #         if match:
-        #             num_str = match.group(1)
-        #             numbers.append(int(num_str))
-        #             padding = max(padding, len(num_str))
-        # numbers.sort()
-        missing_numbers = [n for n in range(1, expected_count + 1) if n not in numbers]
-        
-        missing_songs: List[Song] = []
-        for num in missing_numbers:
-            num_str = f"{num:0{padding}d}"
-            missing_songs.append(Song(
-                song_url='', playlist_url='', error=f'Missing {num_str}',
-                playlist=Playlist('', playlist_name, expected_count),
-                list_position=num_str
-            ))
-        
-        if missing_songs:
-            self.logger.info(f"⚠️ {len(missing_songs)} missing in {playlist_name}:")
-            for song in missing_songs:
-                self.logger.info(f"  🚫 {song.error}")
-        else:
-            self.logger.info(f"✅ All {expected_count} present: {playlist_name}")
-        
-        # Aggregate remaining .info.json to songs[]
-        songs = []
-        for info_file in info_files[1:]:
+    def _backfill_titles(self, engine: YtDlpEngine, tracks: list[dict[str, Any]]) -> None:
+        """Fill in titles the playlist call didn't return.
+
+        SoundCloud only sends full data for the first few tracks of a set; the
+        rest arrive as bare ids, which would leave the track list reading
+        "Track 6, Track 7, …" until each one downloads. A batched /tracks?ids=
+        lookup fixes that for ~1 request per 50 tracks, and only on a
+        playlist's first run — titles are kept in its record after that.
+        """
+        missing = [t for t in tracks if not t.get("title") and str(t.get("id") or "").isdigit()]
+        if not missing:
+            return
+        client_id = self._client_id()
+        if not client_id:
+            return
+        for start in range(0, len(missing), 50):
+            if engine.cancel.is_set():
+                return
+            chunk = missing[start:start + 50]
+            url = ("https://api-v2.soundcloud.com/tracks?ids="
+                   + ",".join(str(t["id"]) for t in chunk) + f"&client_id={client_id}")
             try:
-                with info_file.open('r') as f:
-                    track_data = json.load(f)
-                songs.append(track_data)
-            except Exception:
+                data = json.loads(self._http_get(url, 30))
+            except Exception as e:
+                # Best effort: titles also arrive as each track downloads. A
+                # 429 here is still news the limiter needs, though.
+                if "429" in str(e):
+                    engine.p.limiter.on_rate_limited(reason=str(e))
+                self.logger.debug(f"SoundCloud title lookup stopped: {e}")
+                return
+            by_id = {str(d.get("id")): d for d in data if isinstance(d, dict)} if isinstance(data, list) else {}
+            for t in chunk:
+                d = by_id.get(str(t["id"]))
+                if not d:
+                    continue
+                t["title"] = d.get("title") or t.get("title") or ""
+                user = (d.get("user") or {}).get("username")
+                if user:
+                    t["artists"] = [user]
+            time.sleep(1)   # a short burst at most — this isn't on the limiter's clock
+
+    # ── client_id ────────────────────────────────────────────────────
+
+    def _client_id(self, refresh: bool = False,
+                   say: Callable[[str], None] | None = None) -> str:
+        """A SoundCloud API client_id, or "" to let yt-dlp find its own.
+
+        The id is scraped from soundcloud.com plus its JS bundles. That homepage
+        is heavy, and under scdl's fixed 30s curl timeout a slow response died
+        mid-body ("curl: (28) Operation timed out ... with 557020 bytes
+        received"), taking the whole playlist with it before a single track.
+
+        Doing the lookup here fixes both halves of that: our own timeout is
+        generous and configurable, and the answer is cached on disk, so the
+        usual run never touches soundcloud.com at startup at all.
+        """
+        env_id = os.getenv("SOUNDCLOUD_CLIENT_ID", "").strip()
+        if env_id:
+            return env_id
+
+        cache = self.output_dir / ".cache" / "soundcloud-client-id.txt"
+        if refresh:
+            # The cached id is the prime suspect after a 403.
+            cache.unlink(missing_ok=True)
+        else:
+            try:
+                age = time.time() - cache.stat().st_mtime
+                cached = cache.read_text(encoding="utf-8").strip()
+                if cached and age < self.CLIENT_ID_TTL:
+                    return cached
+            except OSError:
                 pass
-        playlist_data['songs'] = songs
-        
-        with playlist_json_path.open('w', encoding='utf-8') as f:
-            json.dump(playlist_data, f, indent=2, ensure_ascii=False)
-        
-        # Move description
-        desc_file = playlist_dir / f'{playlist_name}.description'
-        if desc_file.exists():
-            desc_file.rename(metadata_root / f'{playlist_name}.txt')
-        
-        # Delete extras
-        for info_file in info_files[1:]:
-            info_file.unlink(missing_ok=True)
-        
-        self.logger.info(f"{playlist_name}.json: {len(songs)} songs")
-        return missing_songs
+
+        client_id = self._generate_client_id()
+        if not client_id:
+            msg = ("⚠️ Could not pre-fetch a SoundCloud client id; letting yt-dlp "
+                   "try its own lookup.")
+            (say or self.logger.warning)(msg)
+            return ""
+
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(client_id, encoding="utf-8")
+        except OSError as e:
+            self.logger.debug(f"Could not cache SoundCloud client id: {e}")
+        self.logger.info("🔑 Resolved SoundCloud client id")
+        return client_id
+
+    def _generate_client_id(self) -> str:
+        """Scrape a client_id out of the web player's JS bundles."""
+        timeout = env_int("SOUNDCLOUD_CLIENT_ID_TIMEOUT", 90)
+        try:
+            home = self._http_get("https://soundcloud.com", timeout)
+        except Exception as e:
+            self.logger.warning(f"SoundCloud client id lookup failed: {e}")
+            return ""
+
+        # Newest bundles come last and are the ones that carry the key, so the
+        # list is walked backwards — usually a single request instead of ten.
+        for url in reversed(self._ASSET_SCRIPT_RE.findall(home)):
+            try:
+                script = self._http_get(url, timeout)
+            except Exception:
+                continue
+            m = self._CLIENT_ID_RE.search(script)
+            if m:
+                return m.group(1)
+        return ""
+
+    def _http_get(self, url: str, timeout: int) -> str:
+        """Fetch a page as a browser would, with our own timeout.
+
+        Prefers curl_cffi because SoundCloud serves a different, TLS-
+        fingerprinted response to plain Python clients; falls back to urllib
+        where it isn't installed.
+        """
+        curl_requests: Any
+        try:
+            from curl_cffi import requests as curl_requests
+        except ImportError:
+            curl_requests = None
+
+        if curl_requests is not None:
+            r = curl_requests.get(url, timeout=timeout, impersonate="chrome")
+            r.raise_for_status()
+            return str(r.text)
+
+        req = urllib.request.Request(url, headers={
+            "User-Agent": self._BROWSER_UA,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return str(resp.read().decode("utf-8", "replace"))

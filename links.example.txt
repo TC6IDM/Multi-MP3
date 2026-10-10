@@ -1,0 +1,15 @@
+# Multi-MP3 Input File
+# Lines starting with # are ignored
+# Supported formats: plain URLs and markdown links
+
+# Spotify — playlist, album, track, or artist
+# https://open.spotify.com/playlist/...
+# [My Playlist](https://open.spotify.com/playlist/...)
+
+# YouTube — playlist or channel
+# https://www.youtube.com/playlist?list=...
+# [My Playlist](https://www.youtube.com/playlist?list=...)
+
+# SoundCloud — playlist or user tracks
+# https://soundcloud.com/user/sets/...
+# [My Playlist](https://soundcloud.com/user/sets/...)

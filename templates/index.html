@@ -1,0 +1,1665 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-MP3</title>
+<meta name="description" content="Keep Spotify, YouTube and SoundCloud playlists downloaded as clean MP3s.">
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236fdae6' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3'/%3E%3C/svg%3E">
+<link rel="preload" href="/static/fonts/bricolage-grotesque-latin-wght.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<!-- One icon set, drawn in one stroke (Lucide geometry, ISC licence). -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <symbol id="i-wave" viewBox="0 0 24 24"><path d="M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-loader" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></symbol>
+  <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+  <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6M12 19h8"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2"/></symbol>
+  <symbol id="i-disc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M10.3 21a2 2 0 0 0 3.4 0M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/></symbol>
+</svg>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand"><svg class="icon" aria-hidden="true"><use href="#i-wave"/></svg>multi-mp3</div>
+    <div id="run-status" class="run-status" data-state="idle"><span class="dot"></span><span id="run-status-label">Idle</span></div>
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab" role="tab" id="tab-links" aria-controls="panel-links" aria-selected="true">Links</button>
+      <button class="tab" role="tab" id="tab-live" aria-controls="panel-live" aria-selected="false" tabindex="-1">Live</button>
+      <button class="tab" role="tab" id="tab-library" aria-controls="panel-library" aria-selected="false" tabindex="-1">Library<span id="failed-count" class="count" hidden></span></button>
+      <button class="tab" role="tab" id="tab-history" aria-controls="panel-history" aria-selected="false" tabindex="-1">History</button>
+      <button class="tab" role="tab" id="tab-system" aria-controls="panel-system" aria-selected="false" tabindex="-1">System</button>
+    </nav>
+  </div>
+</header>
+
+<div id="announcer" class="sr-only" role="status" aria-live="polite"></div>
+
+<main id="main">
+
+<!-- ── Links ── -->
+<section id="panel-links" role="tabpanel" aria-labelledby="tab-links">
+  <div class="panel-head">
+    <h1>Links</h1>
+    <p class="lede">The playlists you keep downloaded. Switch one off to skip it without losing it; every run only fetches what's missing.</p>
+  </div>
+
+  <form id="add-link" class="add-link" autocomplete="off">
+    <label for="add-url" class="sr-only">Playlist link</label>
+    <input id="add-url" type="url" placeholder="Paste a Spotify, YouTube or SoundCloud playlist link" required>
+    <label for="add-label" class="sr-only">Label (optional)</label>
+    <input id="add-label" type="text" placeholder="Label (optional)">
+    <button class="btn" type="submit"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Add</button>
+  </form>
+
+  <div id="link-list" class="link-list" role="list" aria-label="Playlists"></div>
+  <p id="links-empty" class="empty" hidden>No links yet. Paste a playlist link above.</p>
+
+  <details id="raw-editor" class="raw-editor">
+    <summary>Edit links.txt as text</summary>
+    <label for="links-input" class="sr-only">links.txt</label>
+    <textarea id="links-input" spellcheck="false"></textarea>
+    <div class="raw-actions">
+      <button id="raw-save" class="btn btn-sm" type="button">Save text</button>
+      <span id="parse-preview" class="parse-preview"></span>
+    </div>
+  </details>
+
+  <div id="env-warnings"></div>
+
+  <div class="run-bar">
+    <fieldset id="provider-chips">
+      <legend>From</legend>
+    </fieldset>
+    <fieldset class="segmented" title="Every provider runs at the same time. Balanced and Fast download several tracks at once under a rate limiter that pauses the moment SoundCloud or YouTube push back; Careful does one track at a time.">
+      <legend class="sr-only">Speed</legend>
+      <label><input type="radio" name="speed" value="careful"><span>Careful</span></label>
+      <label><input type="radio" name="speed" value="balanced" checked><span>Balanced</span></label>
+      <label><input type="radio" name="speed" value="fast"><span>Fast</span></label>
+    </fieldset>
+    <button id="btn-start" class="btn btn-primary" type="button"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span id="btn-start-label">Download</span></button>
+  </div>
+</section>
+
+<!-- ── Live ── -->
+<section id="panel-live" role="tabpanel" aria-labelledby="tab-live" hidden>
+  <div class="panel-head">
+    <h1>Live</h1>
+    <div class="actions">
+      <button id="btn-cancel" class="btn btn-ghost-danger" type="button" disabled><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg>Stop run</button>
+    </div>
+  </div>
+  <div id="queue" class="queue" hidden></div>
+  <div id="provider-accordion"><p class="empty">Nothing running. Start a download from Links.</p></div>
+  <details class="run-log">
+    <summary>Run log</summary>
+    <pre id="log-output" tabindex="0"></pre>
+  </details>
+</section>
+
+<!-- ── Library ── -->
+<section id="panel-library" role="tabpanel" aria-labelledby="tab-library" hidden>
+  <div class="panel-head">
+    <h1>Library</h1>
+    <span id="lib-totals" class="muted"></span>
+    <div class="lib-tools">
+      <label for="lib-search" class="sr-only">Search playlists</label>
+      <input id="lib-search" type="search" placeholder="Search playlists">
+      <button id="btn-report" class="btn btn-ghost" type="button" aria-expanded="false" aria-controls="failed-report"><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span id="btn-report-label">Failed tracks</span></button>
+      <button id="btn-reset-all" class="btn btn-ghost-danger" type="button"><svg class="icon" aria-hidden="true"><use href="#i-rotate"/></svg>Reset all</button>
+    </div>
+  </div>
+  <div id="failed-report" class="report" hidden></div>
+  <div id="file-list"><p class="empty">Loading…</p></div>
+</section>
+
+<!-- ── History ── -->
+<section id="panel-history" role="tabpanel" aria-labelledby="tab-history" hidden>
+  <div class="panel-head"><h1>History</h1></div>
+  <div id="history-list"><p class="empty">Loading…</p></div>
+</section>
+
+<!-- ── System ── -->
+<section id="panel-system" role="tabpanel" aria-labelledby="tab-system" hidden>
+  <div class="panel-head"><h1>System</h1></div>
+
+  <div class="sys-block">
+    <h2>Tools</h2>
+    <p>yt-dlp breaks whenever YouTube or SoundCloud change their sites, and fixes usually ship within days — so it can be updated here without waiting for a new version of this app.</p>
+    <dl id="sys-facts" class="facts"><dt>Loading…</dt><dd></dd></dl>
+    <div class="sys-actions" style="margin-top:16px">
+      <button id="btn-check-update" class="btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>Check for updates</button>
+      <button id="btn-update-ytdlp" class="btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Update yt-dlp</button>
+      <span id="update-result" class="result" role="status"></span>
+    </div>
+  </div>
+
+  <div class="sys-block">
+    <h2>Notifications</h2>
+    <p>Get told when a run finishes. In this browser, or on your phone through <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy</a> or a Discord webhook — set <code>NOTIFY_URL</code> in <code>.env</code>.</p>
+    <div class="sys-actions">
+      <button id="btn-notify-permission" class="btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-bell"/></svg><span>Allow browser notifications</span></button>
+      <button id="btn-test-notify" class="btn" type="button">Send a test to NOTIFY_URL</button>
+      <span id="notify-result" class="result" role="status"></span>
+    </div>
+  </div>
+
+  <div class="sys-block">
+    <h2>Housekeeping</h2>
+    <p>Removes leftovers: finished jobs' input files, spotdl error lists older than 30 days, and downloads interrupted part-way. Your music and progress records are never touched.</p>
+    <div class="sys-actions">
+      <button id="btn-cleanup" class="btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg>Clean up leftovers</button>
+      <span id="cleanup-result" class="result" role="status"></span>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<dialog id="confirm" aria-labelledby="confirm-title">
+  <form method="dialog">
+    <h2 id="confirm-title"></h2>
+    <p id="confirm-body"></p>
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" value="cancel">Cancel</button>
+      <button class="btn btn-danger" value="ok" id="confirm-ok">OK</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+'use strict';
+
+// ── Small helpers ───────────────────────────────────────────────────────
+
+const $ = id => document.getElementById(id);
+const SVGNS = 'http://www.w3.org/2000/svg';
+
+// Explicit element construction — no HTML parsing, direct node references,
+// and nothing user- or file-derived ever goes through innerHTML.
+function mk(tag, className, text) {
+  const el = document.createElement(tag);
+  if (className) el.className = className;
+  if (text !== undefined && text !== null) el.textContent = text;
+  return el;
+}
+function icon(name, cls) {
+  const svg = document.createElementNS(SVGNS, 'svg');
+  svg.setAttribute('class', 'icon' + (cls ? ' ' + cls : ''));
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS(SVGNS, 'use');
+  use.setAttribute('href', '#i-' + name);
+  svg.appendChild(use);
+  return svg;
+}
+function setIcon(svg, name) {
+  const use = svg && svg.firstChild;
+  const href = '#i-' + name;
+  if (use && use.getAttribute('href') !== href) use.setAttribute('href', href);
+}
+function setText(el, v) { if (el && el.textContent !== v) el.textContent = v; }
+function setAttr(el, k, v) { if (el && el.getAttribute(k) !== v) el.setAttribute(k, v); }
+function setWidth(el, pct) { const w = pct + '%'; if (el && el.style.width !== w) el.style.width = w; }
+
+async function api(path, opts = {}) {
+  const init = { method: opts.method || 'GET', headers: {} };
+  if (opts.body !== undefined) {
+    init.headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(opts.body);
+  }
+  const r = await fetch(path, init);
+  let data = null;
+  try { data = await r.json(); } catch (_) { /* empty body */ }
+  if (!r.ok) {
+    const err = new Error((data && data.detail) || `Request failed (${r.status})`);
+    err.status = r.status;
+    throw err;
+  }
+  return data;
+}
+
+function toast(message, kind) {
+  const el = mk('div', 'toast' + (kind ? ' ' + kind : ''), message);
+  $('toasts').appendChild(el);
+  setTimeout(() => el.remove(), kind === 'bad' ? 8000 : 5000);
+}
+function announce(message) { setText($('announcer'), message); }
+
+function confirmDialog({ title, body, ok = 'OK' }) {
+  const dlg = $('confirm');
+  setText($('confirm-title'), title);
+  setText($('confirm-body'), body);
+  setText($('confirm-ok'), ok);
+  return new Promise(resolve => {
+    dlg.addEventListener('close', () => resolve(dlg.returnValue === 'ok'), { once: true });
+    dlg.showModal();
+  });
+}
+
+function fmtBytes(n) {
+  if (!n) return '0 MB';
+  const gb = n / 1024 ** 3;
+  return gb >= 1 ? gb.toFixed(1) + ' GB' : Math.round(n / 1024 ** 2) + ' MB';
+}
+function fmtDuration(sec) {
+  if (sec == null || sec < 0) return '—';
+  if (sec < 60) return Math.round(sec) + 's';
+  const m = Math.floor(sec / 60), s = Math.round(sec % 60);
+  return m < 60 ? `${m}m ${String(s).padStart(2, '0')}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+function fmtClock(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+function plural(n, word) { return `${n} ${word}${n === 1 ? '' : 's'}`; }
+function shortUrl(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\.|^open\.|^m\./, '');
+    // watch?v=…&list=… — the list id is what names the playlist.
+    const list = u.searchParams.get('list');
+    if (host.includes('youtube') && list) return `${host}/playlist?list=${list}`;
+    return (host + u.pathname).replace(/\/$/, '');
+  } catch (_) { return url; }
+}
+
+// ── Provider marks ──────────────────────────────────────────────────────
+// Real brand marks (simple-icons paths), not lookalike emoji: a TV for
+// YouTube and a speaker for SoundCloud read as "some media thing" rather
+// than naming the service a playlist actually came from.
+const PROVIDER_BRANDS = {
+  youtube: {
+    label: 'YouTube', color: '#FF0000',
+    path: 'M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z',
+  },
+  soundcloud: {
+    label: 'SoundCloud', color: '#FF5500',
+    path: 'M23.999 14.165c-.052 1.796-1.612 3.169-3.4 3.169h-8.18a.68.68 0 0 1-.675-.683V7.862a.747.747 0 0 1 .452-.724s.75-.513 2.333-.513a5.364 5.364 0 0 1 2.763.755 5.433 5.433 0 0 1 2.57 3.54c.282-.08.574-.121.868-.12.884 0 1.73.358 2.347.992s.948 1.49.922 2.373ZM10.721 8.421c.247 2.98.427 5.697 0 8.672a.264.264 0 0 1-.53 0c-.395-2.946-.22-5.718 0-8.672a.264.264 0 0 1 .53 0ZM9.072 9.448c.285 2.659.37 4.986-.006 7.655a.277.277 0 0 1-.55 0c-.331-2.63-.256-5.02 0-7.655a.277.277 0 0 1 .556 0Zm-1.663-.257c.27 2.726.39 5.171 0 7.904a.266.266 0 0 1-.532 0c-.38-2.69-.257-5.21 0-7.904a.266.266 0 0 1 .532 0Zm-1.647.77a26.108 26.108 0 0 1-.008 7.147a.272.272 0 0 1-.542 0a27.955 27.955 0 0 1 0-7.147a.275.275 0 0 1 .55 0Zm-1.67 1.769c.421 1.865.228 3.5-.029 5.388a.257.257 0 0 1-.514 0c-.21-1.858-.398-3.549 0-5.389a.272.272 0 0 1 .543 0Zm-1.655-.273c.388 1.897.26 3.508-.01 5.412-.026.28-.514.283-.54 0-.244-1.878-.347-3.54-.01-5.412a.283.283 0 0 1 .56 0Zm-1.668.911c.4 1.268.257 2.292-.026 3.572a.257.257 0 0 1-.514 0c-.241-1.262-.354-2.312-.023-3.572a.283.283 0 0 1 .563 0Z',
+  },
+  spotify: {
+    label: 'Spotify', color: '#1DB954',
+    path: 'M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z',
+  },
+};
+const PROVIDER_ORDER = ['youtube', 'soundcloud', 'spotify'];
+
+function brandMark(p, size) {
+  const b = PROVIDER_BRANDS[p];
+  const svg = document.createElementNS(SVGNS, 'svg');
+  const s = String(size || 16);
+  svg.setAttribute('class', 'brand-svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', s);
+  svg.setAttribute('height', s);
+  if (!b) return svg;
+  svg.setAttribute('fill', b.color);
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', b.label);
+  const path = document.createElementNS(SVGNS, 'path');
+  path.setAttribute('d', b.path);
+  svg.appendChild(path);
+  return svg;
+}
+
+// ── Tabs ────────────────────────────────────────────────────────────────
+
+const TABS = ['links', 'live', 'library', 'history', 'system'];
+// The tab named in the address bar when the page loaded. Without one, a
+// refresh during a run lands on Live.
+const START_TAB = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : '';
+const loaders = { library: () => loadLibrary(), history: () => loadHistory(), system: () => loadSystem() };
+
+function selectTab(name, focus) {
+  if (!TABS.includes(name)) name = 'links';
+  for (const t of TABS) {
+    const on = t === name;
+    const tab = $('tab-' + t);
+    setAttr(tab, 'aria-selected', String(on));
+    tab.tabIndex = on ? 0 : -1;
+    $('panel-' + t).hidden = !on;
+    if (on && focus) tab.focus();
+  }
+  // The open tab survives a refresh — handy mid-run.
+  if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+  if (loaders[name]) loaders[name]();
+}
+for (const t of TABS) $('tab-' + t).addEventListener('click', () => selectTab(t));
+window.addEventListener('hashchange', () => selectTab(location.hash.slice(1)));
+document.querySelector('.tabs').addEventListener('keydown', e => {
+  const i = TABS.findIndex(t => $('tab-' + t).getAttribute('aria-selected') === 'true');
+  const next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: TABS.length - 1 }[e.key];
+  if (next === undefined) return;
+  e.preventDefault();
+  selectTab(TABS[(next + TABS.length) % TABS.length], true);
+});
+
+// ── Run status, queue, setup warnings ───────────────────────────────────
+
+const STATUS_LABEL = {
+  idle: 'Idle', running: 'Downloading', stopping: 'Stopping…', queued: 'Queued',
+  completed: 'All done', partial: 'Finished — tracks left', failed: 'Run failed', cancelled: 'Stopped',
+};
+let runState = 'idle';
+function setRunStatus(state) {
+  runState = state;
+  const el = $('run-status');
+  setAttr(el, 'data-state', state);
+  setText($('run-status-label'), STATUS_LABEL[state] || state);
+  const busy = state === 'running' || state === 'stopping';
+  $('btn-cancel').disabled = state !== 'running';
+  $('btn-reset-all').disabled = busy;
+  renderStartButton();
+}
+
+let lastStatus = null;
+let attachedJobId = null;
+let firstPoll = true;
+
+async function pollStatus() {
+  let s;
+  try { s = await api('/api/status'); } catch (_) { return; }
+  lastStatus = s;
+  renderEnvWarnings(s);
+  renderQueue(s.queue || []);
+  if (s.running) {
+    setRunStatus(s.current_status === 'cancelling' ? 'stopping' : 'running');
+    if (s.current_job_id !== attachedJobId) {
+      // A refreshed page, or the next queued job starting: replay its events.
+      attachToJob(s.current_job_id, { switchTab: firstPoll && !START_TAB });
+    }
+  } else if (runState === 'running' || runState === 'stopping') {
+    // Finished while the stream was down; the History tab has the outcome.
+    setRunStatus('idle');
+  }
+  firstPoll = false;
+}
+
+let envKey = '';
+function renderEnvWarnings(s) {
+  const warnings = [];
+  if (!s.spotdl) warnings.push('spotdl isn’t installed, so Spotify links will fail. It lives in its own environment: run setup again, or set SPOTDL_BIN.');
+  if (!s.deno) warnings.push('deno wasn’t found, so YouTube downloads will fail with HTTP 403. Install it with “pip install deno”.');
+  const key = warnings.join('|');
+  if (key === envKey) return;
+  envKey = key;
+  const root = $('env-warnings');
+  root.textContent = '';
+  for (const w of warnings) {
+    const n = mk('p', 'notice');
+    n.appendChild(icon('alert'));
+    n.appendChild(mk('span', '', w));
+    root.appendChild(n);
+  }
+}
+
+let queueKey = '';
+function renderQueue(queue) {
+  const key = queue.map(q => q.job_id).join(',');
+  if (key === queueKey) return;
+  queueKey = key;
+  const root = $('queue');
+  root.textContent = '';
+  root.hidden = !queue.length;
+  if (!queue.length) return;
+  root.appendChild(mk('h2', '', 'Up next'));
+  queue.forEach((q, i) => {
+    const row = mk('div', 'queue-item');
+    row.appendChild(mk('span', 'num', String(i + 1)));
+    const providers = q.providers.map(p => (PROVIDER_BRANDS[p] || {}).label || p).join(', ');
+    row.appendChild(mk('span', '', `${plural(q.links, 'playlist')} · ${providers} · ${q.speed}`));
+    const rm = mk('button', 'icon-btn');
+    rm.type = 'button';
+    rm.setAttribute('aria-label', `Remove queued run ${i + 1}`);
+    rm.appendChild(icon('x'));
+    rm.addEventListener('click', async () => {
+      try { await api('/api/jobs/' + q.job_id, { method: 'DELETE' }); } catch (e) { toast(e.message, 'bad'); }
+      pollStatus();
+    });
+    row.appendChild(rm);
+    root.appendChild(row);
+  });
+}
+
+// ── Links ───────────────────────────────────────────────────────────────
+
+let linkEntries = [];
+let lastParsed = { total: 0, spotify: 0, soundcloud: 0, youtube: 0 };
+
+function applyLinksData(d) {
+  linkEntries = d.entries || [];
+  if (!rawDirty) $('links-input').value = d.text || '';
+  lastParsed = d.parsed || lastParsed;
+  renderParsePreview();
+  renderChips();
+  renderStartButton();
+}
+
+async function loadLinks() {
+  try { applyLinksData(await api('/api/links')); } catch (e) { toast(e.message, 'bad'); }
+  renderLinks();
+}
+
+async function saveEntries({ rerender } = {}) {
+  try {
+    const d = await api('/api/links', { method: 'PUT', body: {
+      entries: linkEntries.map(e => ({ line: e.line, url: e.url, label: e.label, enabled: e.enabled, markdown: e.markdown })),
+    } });
+    applyLinksData(d);
+    if (rerender) renderLinks();
+  } catch (e) { toast('Couldn’t save links: ' + e.message, 'bad'); }
+}
+
+function syncBadge(rec) {
+  if (!rec || !rec.total) return ['new', 'New'];
+  if (!rec.left) return ['ok', `Up to date · ${rec.done}`];
+  return ['left', `${rec.left} left of ${rec.total}`];
+}
+
+function renderLinks() {
+  const root = $('link-list');
+  root.textContent = '';
+  $('links-empty').hidden = linkEntries.length > 0;
+  linkEntries.forEach((e, i) => {
+    const row = mk('div', 'link-row' + (e.enabled ? '' : ' off'));
+    row.setAttribute('role', 'listitem');
+    const name = e.label || (e.record && e.record.name) || shortUrl(e.url);
+
+    const sw = mk('label', 'switch');
+    const cb = mk('input');
+    cb.type = 'checkbox';
+    cb.name = 'enabled-' + i;
+    cb.checked = e.enabled;
+    cb.setAttribute('aria-label', `Include “${name}” in downloads`);
+    cb.addEventListener('change', () => {
+      e.enabled = cb.checked;
+      row.classList.toggle('off', !cb.checked);
+      saveEntries();
+    });
+    sw.appendChild(cb);
+    sw.appendChild(mk('span'));
+    row.appendChild(sw);
+    row.appendChild(brandMark(e.provider, 18));
+
+    const main = mk('div', 'link-main');
+    const label = mk('input', 'link-label');
+    label.type = 'text';
+    label.name = 'label-' + i;
+    label.value = e.label;
+    label.placeholder = (e.record && e.record.name) || 'Add a label';
+    label.setAttribute('aria-label', 'Label for ' + shortUrl(e.url));
+    label.addEventListener('change', () => { e.label = label.value.trim(); saveEntries(); });
+    label.addEventListener('keydown', ev => { if (ev.key === 'Enter') label.blur(); });
+    main.appendChild(label);
+    const a = mk('a', 'link-url', shortUrl(e.url));
+    a.href = e.url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    main.appendChild(a);
+    row.appendChild(main);
+
+    const [cls, text] = syncBadge(e.record);
+    const badge = mk('span', 'sync ' + cls, text);
+    if (e.record && (e.record.failed || e.record.unavailable)) {
+      badge.title = `${e.record.failed} failed · ${e.record.unavailable} unavailable`;
+    }
+    row.appendChild(badge);
+
+    const rm = mk('button', 'icon-btn');
+    rm.type = 'button';
+    rm.setAttribute('aria-label', `Remove “${name}”`);
+    rm.appendChild(icon('trash'));
+    rm.addEventListener('click', () => {
+      linkEntries.splice(i, 1);
+      saveEntries({ rerender: true });
+      toast(`Removed “${name}”. Its downloaded files are untouched.`);
+    });
+    row.appendChild(rm);
+    root.appendChild(row);
+  });
+}
+
+$('add-link').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const urls = $('add-url').value.split(/\s+/).filter(Boolean);
+  const label = $('add-label').value.trim();
+  for (const url of urls) linkEntries.push({ url, label: urls.length === 1 ? label : '', enabled: true, markdown: false });
+  await saveEntries({ rerender: true });
+  const before = urls.length;
+  const known = linkEntries.filter(e => urls.includes(e.url)).length;
+  if (known < before) toast('That doesn’t look like a Spotify, YouTube or SoundCloud link.', 'bad');
+  $('add-url').value = '';
+  $('add-label').value = '';
+});
+
+// Raw text editing — the same file, for bulk changes.
+let rawDirty = false;
+let parseTimer = null;
+let parseSeq = 0;
+$('links-input').addEventListener('input', () => {
+  rawDirty = true;
+  clearTimeout(parseTimer);
+  parseTimer = setTimeout(refreshParsePreview, 250);
+});
+$('raw-save').addEventListener('click', saveRaw);
+async function saveRaw() {
+  try {
+    rawDirty = false;
+    applyLinksData(await api('/api/links', { method: 'PUT', body: { text: $('links-input').value } }));
+    renderLinks();
+    toast('Saved links.txt');
+  } catch (e) { rawDirty = true; toast('Couldn’t save: ' + e.message, 'bad'); }
+}
+async function refreshParsePreview() {
+  const seq = ++parseSeq;
+  try {
+    const d = await api('/api/links/parse', { method: 'POST', body: { text: $('links-input').value } });
+    if (seq !== parseSeq) return;     // a later keystroke already answered
+    lastParsed = d.parsed;
+    renderParsePreview();
+  } catch (_) { /* keep the last good counts */ }
+}
+function renderParsePreview() {
+  const el = $('parse-preview');
+  el.textContent = '';
+  if (!lastParsed.total) { el.appendChild(mk('span', '', 'No Spotify, SoundCloud or YouTube links in the text.')); return; }
+  el.appendChild(mk('span', '', 'Recognised '));
+  el.appendChild(mk('strong', '', plural(lastParsed.total, 'link')));
+  for (const p of PROVIDER_ORDER) {
+    const c = mk('span', 'pp-count');
+    c.appendChild(brandMark(p, 13));
+    c.appendChild(mk('span', 'num', String(lastParsed[p] || 0)));
+    el.appendChild(c);
+  }
+}
+
+// Provider chips + speed + the start button.
+function selectedProviders() {
+  return PROVIDER_ORDER.filter(p => { const cb = $('provider-' + p); return !cb || cb.checked; });
+}
+function renderChips() {
+  const root = $('provider-chips');
+  for (const p of PROVIDER_ORDER) {
+    const n = linkEntries.filter(e => e.enabled && e.provider === p).length;
+    let chip = $('chip-' + p);
+    if (!chip) {
+      chip = mk('label', 'chip');
+      chip.id = 'chip-' + p;
+      const cb = mk('input');
+      cb.type = 'checkbox';
+      cb.id = 'provider-' + p;
+      cb.name = 'provider';
+      cb.value = p;
+      cb.checked = true;
+      cb.addEventListener('change', () => { renderParsePreview(); renderStartButton(); });
+      chip.appendChild(cb);
+      chip.appendChild(brandMark(p, 15));
+      chip.appendChild(mk('span', '', PROVIDER_BRANDS[p].label));
+      chip.appendChild(mk('span', 'num'));
+      root.appendChild(chip);
+    }
+    setText(chip.lastChild, String(n));
+  }
+}
+function renderStartButton() {
+  const providers = selectedProviders();
+  const n = linkEntries.filter(e => e.enabled && providers.includes(e.provider)).length;
+  const busy = runState === 'running' || runState === 'stopping';
+  setText($('btn-start-label'), busy ? `Queue ${plural(n, 'playlist')}` : `Download ${plural(n, 'playlist')}`);
+  $('btn-start').disabled = n === 0;
+}
+function selectedSpeed() {
+  const r = document.querySelector('input[name="speed"]:checked');
+  return r ? r.value : 'balanced';
+}
+document.querySelectorAll('input[name="speed"]').forEach(r => r.addEventListener('change', () => {
+  try { localStorage.setItem('mm3-speed', selectedSpeed()); } catch (_) { /* private mode */ }
+}));
+try {
+  const saved = localStorage.getItem('mm3-speed');
+  const r = saved && document.querySelector(`input[name="speed"][value="${saved}"]`);
+  if (r) r.checked = true;
+} catch (_) { /* private mode */ }
+
+$('btn-start').addEventListener('click', async () => {
+  if (rawDirty) await saveRaw();
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission().catch(() => {});
+  }
+  launchJob('', selectedProviders());
+});
+
+// Shared by Links' start button and the Library's Resume / Retry buttons.
+async function launchJob(links, providers) {
+  let r;
+  try {
+    r = await api('/api/jobs', { method: 'POST', body: { links, providers, speed: selectedSpeed() } });
+  } catch (e) { toast(e.message, 'bad'); return; }
+  if (r.status === 'queued') {
+    toast(`Queued — starts after the current run (#${r.position} in line).`);
+    pollStatus();
+    return;
+  }
+  attachToJob(r.job_id, { switchTab: true, links: r.links });
+}
+
+// ── Live: state ─────────────────────────────────────────────────────────
+
+let liveState = { providers: {}, currentJobId: null };
+let es = null;
+
+function ensureProvider(p) {
+  if (!liveState.providers[p]) liveState.providers[p] = { expanded: true, links: {} };
+  return liveState.providers[p];
+}
+function newLink(link, name, status) {
+  return { name: name || shortUrl(link), status, tracks_done: 0, tracks_total: 0, current_title: '', code: null };
+}
+function prepopulate(linksByProvider) {
+  for (const [provider, links] of Object.entries(linksByProvider || {})) {
+    if (!links || !links.length) continue;
+    const p = ensureProvider(provider);
+    for (const link of links) if (!p.links[link]) p.links[link] = newLink(link, '', 'pending');
+  }
+}
+
+// Attach the Live tab to a job and replay its events from the start, so a
+// refreshed page (or a second tab) rebuilds the run exactly. EventSource
+// resumes from Last-Event-ID by itself if the connection drops.
+function attachToJob(jobId, { switchTab = false, links = null } = {}) {
+  if (es) es.close();
+  attachedJobId = jobId;
+  resetLiveDOM();
+  liveState = { providers: {}, currentJobId: jobId };
+  if (links) prepopulate(links);
+  globalLog = [];
+  setText($('log-output'), '');
+  setRunStatus('running');
+  syncAccordion();
+  if (switchTab) selectTab('live');
+  es = new EventSource('/api/jobs/' + jobId + '/events');
+  es.addEventListener('message', e => {
+    let d;
+    try { d = JSON.parse(e.data); } catch (_) { return; }
+    handleLiveEvent(d);
+  });
+}
+
+// Bounded log buffers: textContent += was O(n²) and froze the tab.
+const GLOBAL_LOG_MAX = 400;
+const PLAYLIST_LOG_MAX = 150;
+let globalLog = [];
+let logFlushTimer = null;
+function pushGlobalLog(line) {
+  globalLog.push(line);
+  if (globalLog.length > GLOBAL_LOG_MAX) globalLog.splice(0, globalLog.length - GLOBAL_LOG_MAX);
+  if (!logFlushTimer) logFlushTimer = setTimeout(flushGlobalLog, 300);
+}
+function flushGlobalLog() {
+  logFlushTimer = null;
+  const el = $('log-output');
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  el.textContent = globalLog.join('\n');
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+function pushPlaylistLog(provider, linkId, line) {
+  const info = (liveState.providers[provider] || {}).links?.[linkId];
+  if (!info) return;
+  if (!info.logs) info.logs = [];
+  info.logs.push(line);
+  if (info.logs.length > PLAYLIST_LOG_MAX) info.logs.splice(0, info.logs.length - PLAYLIST_LOG_MAX);
+  if (info.logsOpen) {
+    const card = domCache.providers[provider]?.cards[linkId];
+    if (!card) return;
+    const pane = card.logPane;
+    const atBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 30;
+    pane.appendChild(document.createTextNode(line + '\n'));
+    while (pane.childNodes.length > PLAYLIST_LOG_MAX) pane.removeChild(pane.firstChild);
+    if (atBottom) pane.scrollTop = pane.scrollHeight;
+  }
+}
+
+// Providers report full output paths ("My Playlist/08 Artist - Song.mp3");
+// strip the folder and extension so rows stay readable.
+function cleanTrackTitle(s) {
+  if (!s) return '';
+  let t = String(s).trim().replace(/\\/g, '/');
+  const slash = t.lastIndexOf('/');
+  if (slash >= 0) t = t.slice(slash + 1);
+  return t.replace(/\.(mp3|m4a|webm|opus|ogg|wav|flac|mp4|mkv|part)$/i, '');
+}
+function isPlaceholder(title) { return !title || /^Track \d+$/.test(title); }
+
+// ── O(1) track bookkeeping ──
+// Every per-event operation is constant time; Array.find()/filter() per event
+// made a full playlist O(tracks²) — 3.5s for a 5.7k-track batch.
+function normKey(s) { return String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim(); }
+
+// spotdl prints "Artist - Title" where the metadata has {title, artists};
+// index several aliases so either form resolves.
+function addTrackKeys(info, t, idx) {
+  const title = t.title || '';
+  if (!title) return;
+  const artists = t.artists || [];
+  const keys = [title];
+  if (artists.length) {
+    keys.push(artists[0] + ' - ' + title, artists.join(', ') + ' - ' + title, title + ' - ' + artists[0]);
+  }
+  for (const k of keys) {
+    const nk = normKey(k);
+    if (nk && !info._titleIndex.has(nk)) info._titleIndex.set(nk, idx);
+  }
+}
+function lookupTrack(info, query) {
+  if (!info._titleIndex) return undefined;
+  const nk = normKey(query);
+  if (!nk) return undefined;
+  let idx = info._titleIndex.get(nk);
+  if (idx !== undefined) return idx;
+  const dash = nk.indexOf(' - ');
+  if (dash > 0) {
+    idx = info._titleIndex.get(nk.slice(dash + 3));
+    if (idx !== undefined) return idx;
+    idx = info._titleIndex.get(nk.slice(0, dash));
+  }
+  return idx;
+}
+function initTrackIndex(info) {
+  info._titleIndex = new Map();
+  info._idIndex = new Map();
+  info._dirty = new Set();
+  info._doneCount = 0;
+  info._pendingCursor = 0;
+  info.tracks.forEach((t, i) => {
+    addTrackKeys(info, t, i);
+    if (t.id) info._idIndex.set(t.id, i);
+    if (t.status === 'downloaded') info._doneCount++;
+  });
+  info.tracks_done = info._doneCount;
+}
+// Grow the placeholder list to n rows (a playlist can learn its length in
+// pieces — progress events arriving before any track list).
+function ensureTracks(info, n) {
+  if (!n || n < 0) return;
+  if (!info.tracks) info.tracks = [];
+  const before = info.tracks.length;
+  if (n > before) {
+    for (let i = before; i < n; i++) info.tracks.push({ num: i + 1, title: `Track ${i + 1}`, artists: [], status: 'pending' });
+    if (!info._titleIndex) initTrackIndex(info);
+    else for (let i = before; i < n; i++) addTrackKeys(info, info.tracks[i], i);
+    info._trackSigSalt = (info._trackSigSalt || 0) + 1;
+  }
+  if ((info.tracks_total || 0) < info.tracks.length) info.tracks_total = info.tracks.length;
+}
+function nextPending(info) {
+  const tracks = info.tracks;
+  let i = info._pendingCursor || 0;
+  while (i < tracks.length && tracks[i].status === 'downloaded') i++;
+  info._pendingCursor = i;
+  return i < tracks.length ? tracks[i] : null;
+}
+function setTrackStatus(info, track, status) {
+  if (!track || track.status === status) return;
+  if (track.status === 'downloaded' && status !== 'downloaded') info._doneCount--;
+  if (status === 'downloaded' && track.status !== 'downloaded') info._doneCount++;
+  track.status = status;
+  info.tracks_done = info._doneCount;
+  if (info._dirty) info._dirty.add(track.num);
+}
+function setTrackTitle(info, track, title) {
+  if (!track || !title || track.title === title) return;
+  track.title = title;
+  if (info._titleIndex) addTrackKeys(info, track, track.num - 1);
+  if (info._dirty) info._dirty.add(track.num);
+}
+// A run that stopped early leaves unfinished tracks recorded as still to do,
+// so those return to pending rather than failed.
+function finalizeTrackStates(provider, linkId, info) {
+  if (!info || !info.tracks || !info.tracks.length) return;
+  const stoppedEarly = info.status === 'cancelled' || info.status === 'partial';
+  for (const t of info.tracks) {
+    if (t.status === 'downloading' || t.status === 'retrying') {
+      if (stoppedEarly) setTrackStatus(info, t, 'pending');
+      else { if (!t.error) t.error = 'Download failed'; setTrackStatus(info, t, 'failed'); }
+    }
+  }
+  updateTrackStatusDOM(provider, linkId, info);
+}
+// Playlist outcome codes from the server (src/models.py).
+function linkStatusFromCode(code) {
+  return code === 0 ? 'complete' : code === 2 ? 'partial' : code === 3 ? 'cancelled' : 'failed';
+}
+
+function handleLiveEvent(d) {
+  const t = d.type;
+  if (t === 'log') { pushGlobalLog(d.message); return; }
+
+  if (t === 'job.started') { prepopulate(d.links); scheduleRender(); return; }
+
+  if (t === 'link.started') {
+    const p = ensureProvider(d.provider);
+    // "queued": resolved, waiting for a worker — learn the name and size
+    // without claiming to be downloading yet.
+    const status = d.queued ? 'pending' : 'running';
+    const info = p.links[d.link] || (p.links[d.link] = newLink(d.link, d.name, status));
+    info.status = status;
+    if (d.name) info.name = d.name;
+    if (d.total_tracks) info.tracks_total = d.total_tracks;
+    scheduleRender();
+    return;
+  }
+
+  if (t === 'link.complete') {
+    const info = ensureProvider(d.provider).links[d.link];
+    if (info) {
+      info.status = linkStatusFromCode(d.code);
+      info.code = d.code;
+      if (d.name) info.name = d.name;
+      info.current_title = '';
+      finalizeTrackStates(d.provider, d.link, info);
+    }
+    scheduleRender();
+    return;
+  }
+
+  // Full track list with each track's saved status — ticks off what an
+  // earlier run already has before anything downloads.
+  if (t === 'link.metadata') {
+    const info = ensureProvider(d.provider).links[d.link];
+    if (info && d.tracks) {
+      info.tracks = d.tracks.map((tr, i) => ({ ...tr, num: i + 1, status: tr.status || 'pending' }));
+      info.tracks_total = d.tracks.length;
+      initTrackIndex(info);
+      info._trackSigSalt = (info._trackSigSalt || 0) + 1;
+    }
+    syncAccordion();
+    return;
+  }
+
+  if (t === 'track.progress' || t === 'track.log') {
+    const p = ensureProvider(d.provider);
+    const info = p.links[d.link] || (p.links[d.link] = newLink(d.link, '', 'running'));
+    if (d.event === 'log') { pushPlaylistLog(d.provider, d.link, d.line); return; }
+    applyTrackEvent(info, d);
+    if (info.tracks && info.tracks.length && !info.tracks_total) info.tracks_total = info.tracks.length;
+    if (info._tallyDone !== undefined) info.tracks_done = Math.max(info._doneCount || 0, info._tallyDone);
+    updateTrackStatusDOM(d.provider, d.link, info);
+    scheduleRender();
+    return;
+  }
+
+  if (t === 'provider.cooldown' || t === 'provider.rate') {
+    const p = ensureProvider(d.provider);
+    if (d.rate) p.rate = d.rate;
+    if (d.workers) p.workers = d.workers;
+    if (t === 'provider.cooldown') {
+      p.cooldownUntil = Date.now() + (d.seconds || 0) * 1000;
+      p.cooldownReason = d.reason || '';
+      startCooldownTicker();
+      announce(`${(PROVIDER_BRANDS[d.provider] || {}).label || d.provider} is rate-limiting. Downloads resume in ${fmtClock(d.seconds * 1000)}.`);
+    }
+    scheduleRender();
+    return;
+  }
+
+  if (t === 'done' || (t.startsWith('job.') && t !== 'job.started')) finishLive(d);
+}
+
+function applyTrackEvent(info, d) {
+  if (d.event === 'track') {
+    // "Downloading item X of Y" — the authoritative position.
+    info.tracks_total = d.total;
+    info._currentItem = d.current;
+    ensureTracks(info, d.total);
+    const tr = info.tracks[d.current - 1];
+    info.current_title = tr && !isPlaceholder(tr.title) ? tr.title : `Track ${d.current} of ${d.total}`;
+    setTrackStatus(info, tr, 'downloading');
+  } else if (d.event === 'track_active') {
+    const title = cleanTrackTitle(d.filename || '');
+    if (title) info.current_title = title;
+    const tr = info.tracks && info._currentItem ? info.tracks[info._currentItem - 1] : null;
+    if (tr) { if (isPlaceholder(tr.title)) setTrackTitle(info, tr, title); setTrackStatus(info, tr, 'downloading'); }
+  } else if (d.event === 'track_complete') {
+    const title = cleanTrackTitle(d.filename || d.title || '');
+    if (d.index) ensureTracks(info, d.index);
+    if (!info.tracks) return;
+    let target = null;
+    if (d.index) target = info.tracks[d.index - 1] || null;          // exact (engine)
+    else if (d.recovered) {
+      const idx = lookupTrack(info, title);                           // one named track
+      if (idx !== undefined) target = info.tracks[idx];
+    } else {
+      target = info._currentItem ? info.tracks[info._currentItem - 1] : null;
+      if ((!target || target.status === 'downloaded') && title) {
+        const idx = lookupTrack(info, title);
+        if (idx !== undefined) target = info.tracks[idx];
+      }
+      if (!target || target.status === 'downloaded') target = nextPending(info);
+    }
+    if (target) {
+      if (isPlaceholder(target.title)) setTrackTitle(info, target, title);
+      if (d.recovered) target.recovered = true;
+      if (d.copied) target.copied = true;
+      if (d.archived) target.archived = true;
+      setTrackStatus(info, target, 'downloaded');
+      info.current_title = target.title;
+    }
+  } else if (d.event === 'searching') {
+    info.current_title = 'Finding ' + d.query;
+    if (info.tracks) {
+      const idx = lookupTrack(info, d.query);
+      if (idx !== undefined) setTrackStatus(info, info.tracks[idx], 'downloading');
+    }
+  } else if (d.event === 'track_retry') {
+    // Spotify: a second attempt via our own YouTube search (id or title).
+    // Engine: a track back in the queue after a rate limit (its index).
+    let idx;
+    if (d.index) idx = d.index - 1;
+    if (idx === undefined && d.track_id && info._idIndex) idx = info._idIndex.get(d.track_id);
+    if (idx === undefined && d.title) idx = lookupTrack(info, d.title);
+    const tr = idx !== undefined && info.tracks ? info.tracks[idx] : null;
+    if (tr) { tr.error = ''; setTrackStatus(info, tr, 'retrying'); }
+  } else if (d.event === 'track_failed') {
+    let idx;
+    if (d.track_id && info._idIndex) idx = info._idIndex.get(d.track_id);
+    if (idx === undefined && d.title) idx = lookupTrack(info, d.title);
+    if (idx === undefined && d.index) idx = d.index - 1;
+    const tr = idx !== undefined && info.tracks ? info.tracks[idx] : null;
+    if (tr) {
+      tr.error = d.error || 'Download failed';
+      if (info._dirty) info._dirty.add(tr.num);
+      setTrackStatus(info, tr, d.unavailable ? 'unavailable' : 'failed');
+    }
+  } else if (d.event === 'tally') {
+    if (d.total) info.tracks_total = d.total;
+    info._tallyDone = d.done;
+  } else if (d.event === 'error') {
+    info.status = 'failed';
+  }
+}
+
+function finishLive(d) {
+  if (es) { es.close(); es = null; }
+  const status = d.status || (d.type === 'job.completed' ? 'completed' : 'failed');
+  for (const [prov, pdata] of Object.entries(liveState.providers)) {
+    pdata.cooldownUntil = 0;
+    for (const [lk, info] of Object.entries(pdata.links)) {
+      if (info.status === 'running' || info.status === 'pending') {
+        info.status = status === 'completed' ? 'complete'
+          : status === 'cancelled' ? 'cancelled' : status === 'partial' ? 'partial' : 'failed';
+      }
+      finalizeTrackStates(prov, lk, info);
+    }
+  }
+  syncAccordion();
+  setRunStatus(STATUS_LABEL[status] ? status : 'idle');
+  if (d.title) {
+    announce(d.title + '. ' + (d.summary || ''));
+    if ('Notification' in window && Notification.permission === 'granted' && document.visibilityState !== 'visible') {
+      try { new Notification(d.title, { body: d.summary || '' }); } catch (_) { /* unsupported */ }
+    }
+  }
+  libraryStale = true;
+  pollStatus();
+  // The Links list shows each playlist's sync state; refresh it, unless a
+  // label is mid-edit.
+  if (!rawDirty && !$('link-list').contains(document.activeElement)) loadLinks();
+}
+
+$('btn-cancel').addEventListener('click', async () => {
+  if (!lastStatus || !lastStatus.current_job_id) return;
+  setRunStatus('stopping');
+  try { await api('/api/jobs/' + lastStatus.current_job_id, { method: 'DELETE' }); }
+  catch (e) { toast(e.message, 'bad'); }
+});
+
+// ── Live: DOM ───────────────────────────────────────────────────────────
+// Nodes are built once and patched in place: rebuilding restarted every CSS
+// transition and was the old "flashing". Track rows are only built when a
+// playlist is expanded — 5k rows up front made big runs heavy.
+
+let renderTimer = null;
+function scheduleRender() {
+  if (renderTimer) return;
+  renderTimer = setTimeout(() => { renderTimer = null; syncAccordion(); }, 120);
+}
+
+const domCache = { providers: {} };
+const trackListCache = {};
+let uid = 0;
+
+function resetLiveDOM() {
+  for (const k of Object.keys(domCache.providers)) delete domCache.providers[k];
+  for (const k of Object.keys(trackListCache)) delete trackListCache[k];
+  $('provider-accordion').textContent = '';
+}
+
+const TRACK_ICON = { downloaded: 'check', downloading: 'loader', failed: 'x', unavailable: 'ban', retrying: 'refresh', pending: 'clock' };
+const TRACK_WORD = { downloaded: 'Downloaded', downloading: 'Downloading', failed: 'Failed', unavailable: 'Unavailable', retrying: 'Retrying', pending: 'To do' };
+
+function trackNote(t) {
+  if (t.status === 'failed' || t.status === 'unavailable') return t.error || (t.status === 'failed' ? 'Download failed' : 'Not available at the source');
+  if (t.recovered) return 'Recovered by searching YouTube after spotdl’s match failed';
+  if (t.copied) return 'Copied from another playlist that already had it';
+  return '';
+}
+
+function buildTrackList(info, id) {
+  const tracks = info.tracks || [];
+  const el = mk('div', 'track-list');
+  el.id = id;
+  const header = mk('div', 'track-head');
+  el.appendChild(header);
+  const rows = {};
+  const frag = document.createDocumentFragment();
+  for (const t of tracks) {
+    const row = mk('div', 'trk');
+    row.dataset.s = t.status || 'pending';
+    const ic = icon(TRACK_ICON[t.status] || 'clock');
+    const sr = mk('span', 'sr-only', TRACK_WORD[t.status] || 'To do');
+    const num = mk('span', 'trk-num num', String(t.num));
+    const title = mk('span', 'trk-title', t.title || '');
+    const artist = mk('span', 'trk-artist', (t.artists || []).join(', '));
+    const note = mk('span', 'trk-note', trackNote(t));
+    note.hidden = !note.textContent;
+    row.append(ic, sr, num, title, artist, note);
+    frag.appendChild(row);
+    rows[t.num] = { row, ic, sr, title, note };
+  }
+  el.appendChild(frag);
+  return { el, header, rows };
+}
+
+function getTrackList(provider, linkId, info, id) {
+  const key = provider + '|' + linkId;
+  const sig = (info.tracks || []).length + ':' + (info._trackSigSalt || 0);
+  let entry = trackListCache[key];
+  if (!entry || entry.sig !== sig) {
+    const fresh = buildTrackList(info, id);
+    fresh.sig = sig;
+    if (entry && entry.el.parentNode) entry.el.parentNode.replaceChild(fresh.el, entry.el);
+    trackListCache[key] = entry = fresh;
+    renderTrackHeader(entry, info);
+  }
+  return entry.el;
+}
+
+function renderTrackHeader(entry, info) {
+  let done = 0, bad = 0, na = 0, had = 0, copied = 0;
+  for (const t of info.tracks) {
+    if (t.status === 'downloaded') done++;
+    else if (t.status === 'failed') bad++;
+    else if (t.status === 'unavailable') na++;
+    if (t.archived) had++;
+    if (t.copied) copied++;
+  }
+  const parts = [`${done} of ${info.tracks.length} downloaded`];
+  if (had) parts.push(`${had} from earlier runs`);
+  if (copied) parts.push(`${copied} copied from other playlists`);
+  if (bad) parts.push(`${bad} failed`);
+  if (na) parts.push(`${na} unavailable`);
+  setText(entry.header, parts.join(' · '));
+}
+
+function updateTrackStatusDOM(provider, linkId, info) {
+  const entry = trackListCache[provider + '|' + linkId];
+  if (!entry || !info.tracks) return;
+  const dirty = info._dirty;
+  if (dirty && dirty.size) {
+    for (const num of dirty) {
+      const ref = entry.rows[num];
+      const t = info.tracks[num - 1];
+      if (!ref || !t) continue;
+      const s = t.status || 'pending';
+      if (ref.row.dataset.s !== s) ref.row.dataset.s = s;
+      setIcon(ref.ic, TRACK_ICON[s] || 'clock');
+      setText(ref.sr, TRACK_WORD[s] || 'To do');
+      if (t.title) setText(ref.title, t.title);
+      const note = trackNote(t);
+      setText(ref.note, note);
+      ref.note.hidden = !note;
+    }
+    dirty.clear();
+  }
+  renderTrackHeader(entry, info);
+}
+
+function ensureProviderSection(p) {
+  let entry = domCache.providers[p];
+  if (entry) return entry;
+  const root = $('provider-accordion');
+  const empty = root.querySelector('.empty');
+  if (empty) empty.remove();
+
+  const section = mk('section', 'lane');
+  section.dataset.provider = p;
+  const head = mk('h2', 'lane-head');
+  const toggle = mk('button', 'lane-toggle');
+  toggle.type = 'button';
+  const bodyId = 'lane-' + p;
+  toggle.setAttribute('aria-controls', bodyId);
+  toggle.setAttribute('aria-expanded', 'true');
+  toggle.append(icon('chevron'), brandMark(p, 18), mk('span', '', (PROVIDER_BRANDS[p] || {}).label || p));
+  toggle.addEventListener('click', () => toggleProvider(p));
+  const stats = mk('span', 'lane-stats num');
+  const rate = mk('span', 'lane-rate');
+  const state = mk('span', 'lane-state');
+  head.append(toggle, stats, rate, state);
+  const body = mk('div', 'lane-body');
+  body.id = bodyId;
+  section.append(head, body);
+
+  // Stable provider order regardless of which reports first.
+  const idx = PROVIDER_ORDER.indexOf(p);
+  const after = Array.from(root.children).find(s => PROVIDER_ORDER.indexOf(s.dataset.provider) > idx);
+  root.insertBefore(section, after || null);
+
+  entry = { section, body, toggle, stats, rate, state, cards: {} };
+  domCache.providers[p] = entry;
+  return entry;
+}
+
+function ensureCard(provider, linkId) {
+  const pEntry = ensureProviderSection(provider);
+  let card = pEntry.cards[linkId];
+  if (card) return card;
+  const n = ++uid;
+
+  const root = mk('article', 'pl-row');
+  const line = mk('div', 'pl-line');
+  const toggle = mk('button', 'icon-btn pl-toggle');
+  toggle.type = 'button';
+  toggle.setAttribute('aria-expanded', 'false');
+  toggle.setAttribute('aria-controls', 'tracks-' + n);
+  toggle.appendChild(icon('chevron'));
+  toggle.addEventListener('click', () => toggleTracks(provider, linkId));
+
+  const main = mk('div', 'pl-main');
+  const name = mk('a', 'pl-name');
+  if (/^https?:\/\//i.test(linkId)) { name.href = linkId; name.target = '_blank'; name.rel = 'noopener noreferrer'; }
+  const sub = mk('div', 'pl-sub');
+  const state = mk('span', 'pl-state');
+  const stateIcon = icon('clock');
+  const stateText = mk('span');
+  state.append(stateIcon, stateText);
+  const now = mk('span', 'pl-now');
+  sub.append(state, now);
+  main.append(name, sub);
+
+  const progress = mk('div', 'progress');
+  const bar = mk('div', 'bar');
+  const fill = mk('div', 'fill');
+  bar.appendChild(fill);
+  const count = mk('span', 'num');
+  progress.append(bar, count);
+
+  const logBtn = mk('button', 'icon-btn');
+  logBtn.type = 'button';
+  logBtn.setAttribute('aria-expanded', 'false');
+  logBtn.setAttribute('aria-controls', 'log-' + n);
+  logBtn.appendChild(icon('terminal'));
+  logBtn.addEventListener('click', () => togglePlaylistLog(provider, linkId));
+
+  line.append(toggle, main, progress, logBtn);
+  const logPane = mk('pre', 'pl-log-pane');
+  logPane.id = 'log-' + n;
+  logPane.hidden = true;
+  logPane.tabIndex = 0;
+  root.append(line, logPane);
+  pEntry.body.appendChild(root);
+
+  card = { root, toggle, name, stateIcon, stateText, now, fill, count, logBtn, logPane, tracksId: 'tracks-' + n };
+  pEntry.cards[linkId] = card;
+  return card;
+}
+
+const CARD_STATE = {
+  running: ['loader', 'Downloading'], pending: ['clock', 'Queued'], complete: ['check', 'Done'],
+  failed: ['x', 'Failed'], partial: ['alert', ''], cancelled: ['stop', ''],
+};
+
+function syncAccordion() {
+  const provs = liveState.providers;
+  const root = $('provider-accordion');
+  if (!Object.keys(provs).length) {
+    if (!root.firstChild) root.appendChild(mk('p', 'empty', 'Nothing running. Start a download from Links.'));
+    return;
+  }
+  for (const p of PROVIDER_ORDER) {
+    const data = provs[p];
+    if (!data || !Object.keys(data.links).length) continue;
+    const pEntry = ensureProviderSection(p);
+    const links = Object.values(data.links);
+    const count = s => links.filter(l => l.status === s).length;
+    const running = count('running'), pending = count('pending'), done = count('complete');
+    const failed = count('failed'), incomplete = count('partial') + count('cancelled');
+    const totalTracks = links.reduce((s, l) => s + (l.tracks_total || 0), 0);
+    const doneTracks = links.reduce((s, l) => s + (l.status === 'complete' ? (l.tracks_total || l.tracks_done || 0) : (l.tracks_done || 0)), 0);
+
+    const expanded = data.expanded !== false;
+    setAttr(pEntry.toggle, 'aria-expanded', String(expanded));
+    pEntry.body.hidden = !expanded;
+    setText(pEntry.stats, `${doneTracks}/${totalTracks || '?'} tracks`);
+
+    const coolLeft = (data.cooldownUntil || 0) - Date.now();
+    if (coolLeft > 0) {
+      pEntry.rate.className = 'lane-rate cooling';
+      setText(pEntry.rate, `Rate-limited — resuming in ${fmtClock(coolLeft)}` + (data.rate ? ` at ${Math.round(data.rate)}/min` : ''));
+      if (pEntry.rate.title !== data.cooldownReason) pEntry.rate.title = data.cooldownReason || '';
+    } else {
+      pEntry.rate.className = 'lane-rate';
+      setText(pEntry.rate, data.rate ? `${Math.round(data.rate)} tracks/min` + (data.workers ? ` · ${data.workers} at a time` : '') : '');
+    }
+
+    const [cls, label] = running ? ['running', `${running} downloading`]
+      : pending ? ['', `${pending} queued`]
+      : failed && !done ? ['bad', `${failed} failed`]
+      : incomplete ? ['warn', `${incomplete} incomplete`]
+      : ['ok', `${done}/${links.length} done`];
+    pEntry.state.className = 'lane-state' + (cls ? ' ' + cls : '');
+    setText(pEntry.state, label);
+
+    for (const [linkId, info] of Object.entries(data.links)) {
+      const card = ensureCard(p, linkId);
+      const tracks = info.tracks || [];
+      const hasTracks = tracks.length > 0;
+      setAttr(card.root, 'data-state', info.status);
+      setText(card.name, info.name || linkId);
+
+      // "Left" is only counted for a finished card; per render it'd be O(tracks).
+      const stopped = info.status === 'partial' || info.status === 'cancelled';
+      const left = stopped && hasTracks ? tracks.filter(t => t.status !== 'downloaded' && t.status !== 'unavailable').length : 0;
+      const [ic, word] = CARD_STATE[info.status] || CARD_STATE.pending;
+      setIcon(card.stateIcon, ic);
+      setText(card.stateText, info.status === 'partial' ? `${left || 'Some'} left — run again to finish`
+        : info.status === 'cancelled' ? `Stopped — ${left} left` : word);
+      setText(card.now, info.status === 'running' && info.current_title ? info.current_title : '');
+
+      const pct = info.tracks_total > 0
+        ? Math.min(100, Math.round((info.tracks_done || 0) / info.tracks_total * 100))
+        : (info.status === 'complete' ? 100 : 0);
+      setWidth(card.fill, pct);
+      setText(card.count, `${info.tracks_done || 0}/${info.tracks_total || '?'}`);
+
+      card.toggle.disabled = !hasTracks;
+      const label2 = info.name || 'playlist';
+      setAttr(card.toggle, 'aria-label', (info.expanded ? 'Hide' : 'Show') + ` tracks of ${label2}`);
+      setAttr(card.logBtn, 'aria-label', `Log for ${label2}`);
+      if (hasTracks && info.expanded) {
+        const listEl = getTrackList(p, linkId, info, card.tracksId);
+        if (listEl.parentNode !== card.root) card.root.appendChild(listEl);
+        listEl.hidden = false;
+      }
+    }
+  }
+}
+
+function toggleProvider(p) {
+  const data = liveState.providers[p];
+  if (!data) return;
+  data.expanded = data.expanded === false;
+  syncAccordion();
+}
+function toggleTracks(provider, linkId) {
+  const info = liveState.providers[provider]?.links[linkId];
+  if (!info || !(info.tracks || []).length) return;
+  info.expanded = !info.expanded;
+  const card = domCache.providers[provider]?.cards[linkId];
+  if (!card) return;
+  setAttr(card.toggle, 'aria-expanded', String(info.expanded));
+  if (info.expanded) {
+    const listEl = getTrackList(provider, linkId, info, card.tracksId);
+    if (listEl.parentNode !== card.root) card.root.appendChild(listEl);
+    listEl.hidden = false;
+    if (info._dirty) { info._dirty.clear(); }
+  } else {
+    const entry = trackListCache[provider + '|' + linkId];
+    if (entry) entry.el.hidden = true;
+  }
+  syncAccordion();
+}
+function togglePlaylistLog(provider, linkId) {
+  const info = liveState.providers[provider]?.links[linkId];
+  const card = domCache.providers[provider]?.cards[linkId];
+  if (!info || !card) return;
+  info.logsOpen = !info.logsOpen;
+  setAttr(card.logBtn, 'aria-expanded', String(info.logsOpen));
+  card.logPane.hidden = !info.logsOpen;
+  if (info.logsOpen) {
+    card.logPane.textContent = (info.logs || []).join('\n') || 'No output yet.';
+    card.logPane.scrollTop = card.logPane.scrollHeight;
+  }
+}
+
+// One shared ticker drives every cooldown countdown, stopping itself after.
+let cooldownTicker = null;
+function startCooldownTicker() {
+  if (cooldownTicker) return;
+  cooldownTicker = setInterval(() => {
+    const any = Object.values(liveState.providers).some(p => (p.cooldownUntil || 0) > Date.now());
+    syncAccordion();
+    if (!any) { clearInterval(cooldownTicker); cooldownTicker = null; }
+  }, 1000);
+}
+
+// ── Library ─────────────────────────────────────────────────────────────
+
+let libItems = [];
+let libraryStale = true;
+
+async function loadLibrary(force) {
+  if (!force && !libraryStale && libItems.length) { renderLibrary(); return; }
+  try {
+    const d = await api('/api/library');
+    libItems = d.items;
+    libraryStale = false;
+    setText($('lib-totals'), `${plural(d.items.length, 'playlist')} · ${d.total_files.toLocaleString()} tracks · ${fmtBytes(d.total_bytes)}`);
+  } catch (e) { toast(e.message, 'bad'); return; }
+  renderLibrary();
+  loadReportCount();
+}
+
+function renderLibrary() {
+  const root = $('file-list');
+  root.textContent = '';
+  const q = $('lib-search').value.trim().toLowerCase();
+  const items = q ? libItems.filter(i => (i.name || '').toLowerCase().includes(q) || (i.folder || '').toLowerCase().includes(q)) : libItems;
+  $('btn-reset-all').disabled = !libItems.some(i => i.key) || runState === 'running';
+  if (!items.length) {
+    root.appendChild(mk('p', 'empty', q ? 'No playlists match that search.' : 'Nothing downloaded yet.'));
+    return;
+  }
+  for (const it of items) root.appendChild(libraryRow(it));
+}
+$('lib-search').addEventListener('input', renderLibrary);
+
+function libraryRow(it) {
+  const row = mk('div', 'lib-row');
+  row.dataset.state = !it.key ? 'pending' : it.left ? 'partial' : 'complete';
+
+  if (it.cover) {
+    const img = mk('img', 'cover');
+    img.src = it.cover;
+    img.alt = '';
+    img.loading = 'lazy';
+    row.appendChild(img);
+  } else {
+    const ph = mk('div', 'cover');
+    ph.appendChild(it.provider ? brandMark(it.provider, 20) : icon('disc'));
+    row.appendChild(ph);
+  }
+
+  const main = mk('div', 'lib-main');
+  const name = mk(it.has_folder ? 'a' : 'span', 'lib-name', it.name || it.folder);
+  if (it.has_folder) name.href = '/playlist/' + encodeURIComponent(it.folder);
+  main.appendChild(name);
+  const meta = mk('div', 'lib-meta');
+  if (it.provider) meta.appendChild(mk('span', '', PROVIDER_BRANDS[it.provider]?.label || it.provider));
+  if (it.key) {
+    meta.appendChild(mk('span', 'num', `${it.done}/${it.total} done`));
+    if (it.pending) meta.appendChild(mk('span', 'left', `${it.pending} to do`));
+    if (it.failed) meta.appendChild(mk('span', 'bad', `${it.failed} failed`));
+    if (it.unavailable) meta.appendChild(mk('span', '', `${it.unavailable} unavailable`));
+  } else {
+    const nt = mk('span', '', 'Not tracked yet');
+    nt.title = 'Downloaded before progress records existed — it gets one the next time it runs';
+    meta.appendChild(nt);
+  }
+  meta.appendChild(mk('span', 'num', `${plural(it.files, 'file')} · ${fmtBytes(it.size_bytes)}`));
+  main.appendChild(meta);
+  row.appendChild(main);
+
+  const progress = mk('div', 'progress');
+  if (it.key && it.total) {
+    const bar = mk('div', 'bar');
+    const fill = mk('div', 'fill');
+    fill.style.width = Math.round(it.done / it.total * 100) + '%';
+    bar.appendChild(fill);
+    progress.appendChild(bar);
+  }
+  row.appendChild(progress);
+
+  const actions = mk('div', 'lib-actions');
+  if (it.key && it.url) {
+    const go = mk('button', 'btn btn-sm', it.left ? 'Resume' : 'Check for new');
+    go.type = 'button';
+    go.title = it.left ? `Download the ${it.left} track(s) still to do` : 'Re-check the playlist and fetch anything added since';
+    go.addEventListener('click', () => launchJob(it.url, [it.provider]));
+    actions.appendChild(go);
+    if (it.failed || it.unavailable) {
+      const retry = mk('button', 'btn btn-sm btn-ghost', 'Retry failed');
+      retry.type = 'button';
+      retry.title = 'Try the failed and unavailable tracks again';
+      retry.addEventListener('click', () => retryAndRun([it]));
+      actions.appendChild(retry);
+    }
+    const reset = mk('button', 'btn btn-sm btn-ghost-danger', 'Reset');
+    reset.type = 'button';
+    reset.addEventListener('click', () => resetProgress([{ provider: it.provider, key: it.key }], it.name));
+    actions.appendChild(reset);
+  }
+  row.appendChild(actions);
+  return row;
+}
+
+async function retryAndRun(items) {
+  try {
+    const r = await api('/api/state/retry', { method: 'POST', body: { targets: items.map(i => ({ provider: i.provider, key: i.key })) } });
+    toast(`Retrying ${plural(r.tracks, 'track')}.`);
+  } catch (e) { toast(e.status === 409 ? 'Wait for the current download to finish first.' : e.message, 'bad'); return; }
+  const byProvider = [...new Set(items.map(i => i.provider))];
+  launchJob(items.map(i => i.url).join('\n'), byProvider);
+}
+
+// Reset keeps the MP3s: each one is replaced only once its re-download has
+// completely finished, so a rate-limited run never leaves fewer files.
+async function resetProgress(targets, name) {
+  const ok = await confirmDialog({
+    title: targets ? `Reset “${name}”?` : 'Reset every playlist?',
+    body: 'The next run re-downloads every track and overwrites the existing MP3s. Files stay where they are until each replacement has fully downloaded.',
+    ok: 'Reset',
+  });
+  if (!ok) return;
+  try {
+    const r = await api('/api/state/reset', { method: 'POST', body: targets ? { targets } : {} });
+    toast(`Reset ${plural(r.reset, 'playlist')}. Run it again to re-download.`);
+  } catch (e) { toast(e.status === 409 ? 'Wait for the current download to finish first.' : e.message, 'bad'); }
+  loadLibrary(true);
+}
+$('btn-reset-all').addEventListener('click', () => resetProgress(null));
+
+// Failed tracks: what couldn't be downloaded, why, and where to look by hand.
+let reportOpen = false;
+async function loadReportCount() {
+  try {
+    const report = await api('/api/report/failed');
+    const n = report.reduce((s, r) => s + r.tracks.length, 0);
+    setText($('btn-report-label'), n ? `Failed tracks (${n})` : 'Failed tracks');
+    const badge = $('failed-count');
+    badge.hidden = !n;
+    setText(badge, String(n));
+    badge.setAttribute('aria-label', `${n} failed tracks`);
+    if (reportOpen) renderReport(report);
+  } catch (_) { /* non-essential */ }
+}
+$('btn-report').addEventListener('click', async () => {
+  reportOpen = !reportOpen;
+  setAttr($('btn-report'), 'aria-expanded', String(reportOpen));
+  $('failed-report').hidden = !reportOpen;
+  if (reportOpen) renderReport(await api('/api/report/failed'));
+});
+function searchLink(label, url) {
+  const a = mk('a', '', label);
+  a.href = url;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  return a;
+}
+function renderReport(report) {
+  const root = $('failed-report');
+  root.textContent = '';
+  const head = mk('div', 'report-head');
+  const total = report.reduce((s, r) => s + r.tracks.length, 0);
+  head.appendChild(mk('h2', '', total ? `${plural(total, 'track')} couldn’t be downloaded` : 'Nothing failed'));
+  const actions = mk('div', 'actions');
+  const txt = mk('a', 'btn btn-sm btn-ghost');
+  txt.href = '/api/report/failed.txt';
+  txt.target = '_blank';
+  txt.append(icon('file'), document.createTextNode('Open as text'));
+  actions.appendChild(txt);
+  head.appendChild(actions);
+  root.appendChild(head);
+  for (const g of report) {
+    const group = mk('div', 'report-group');
+    const h = mk('h3');
+    h.append(brandMark(g.provider, 15), document.createTextNode(g.name || g.url));
+    const retry = mk('button', 'btn btn-sm btn-ghost', 'Retry these');
+    retry.type = 'button';
+    retry.style.marginLeft = 'auto';
+    retry.addEventListener('click', () => retryAndRun([g]));
+    h.appendChild(retry);
+    group.appendChild(h);
+    for (const t of g.tracks) {
+      const row = mk('div', 'report-track');
+      row.appendChild(mk('span', 'num', String(t.index)));
+      row.appendChild(mk('span', '', [t.artists[0], t.title].filter(Boolean).join(' – ')));
+      const q = encodeURIComponent(t.query);
+      row.appendChild(searchLink('YouTube', 'https://www.youtube.com/results?search_query=' + q));
+      row.appendChild(searchLink('SoundCloud', 'https://soundcloud.com/search?q=' + q));
+      row.appendChild(mk('span', 'why', (t.status === 'unavailable' ? 'Unavailable: ' : '') + t.error));
+      group.appendChild(row);
+    }
+    root.appendChild(group);
+  }
+}
+
+// ── History ─────────────────────────────────────────────────────────────
+
+async function loadHistory() {
+  let jobs;
+  try { jobs = await api('/api/jobs'); } catch (e) { toast(e.message, 'bad'); return; }
+  const root = $('history-list');
+  root.textContent = '';
+  if (!jobs.length) { root.appendChild(mk('p', 'empty', 'No runs yet.')); return; }
+  const table = mk('table', 'table');
+  const thead = mk('thead');
+  const hr = mk('tr');
+  for (const h of ['Started', 'Result', 'Playlists', 'Tracks', 'Speed', 'Took']) hr.appendChild(mk('th', '', h));
+  thead.appendChild(hr);
+  table.appendChild(thead);
+  const tbody = mk('tbody');
+  for (const j of jobs) {
+    const tr = mk('tr');
+    tr.appendChild(mk('td', 'num', new Date(j.created_at * 1000).toLocaleString()));
+    const st = mk('td');
+    st.appendChild(mk('span', 'status-chip ' + j.status, STATUS_LABEL[j.status] || j.status));
+    tr.appendChild(st);
+    tr.appendChild(mk('td', 'num', String((j.links || []).length)));
+    const tracks = j.total
+      ? `${j.done}/${j.total}` + (j.failed ? ` · ${j.failed} failed` : '') + (j.pending ? ` · ${j.pending} left` : '')
+      : '—';
+    tr.appendChild(mk('td', 'num', tracks));
+    tr.appendChild(mk('td', '', j.speed || (j.parallel ? 'parallel' : 'sequential')));
+    const took = j.finished_at ? j.finished_at - (j.started_at || j.created_at) : null;
+    tr.appendChild(mk('td', 'num', fmtDuration(took)));
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  root.appendChild(table);
+}
+
+// ── System ──────────────────────────────────────────────────────────────
+
+async function loadSystem(check) {
+  let v;
+  try { v = await api('/api/system' + (check ? '?check=1' : '')); } catch (e) { toast(e.message, 'bad'); return; }
+  const dl = $('sys-facts');
+  dl.textContent = '';
+  const fact = (k, val) => { dl.appendChild(mk('dt', '', k)); dl.appendChild(mk('dd', 'num', val)); };
+  let yt = v.yt_dlp || '—';
+  if (v.restart_required) yt += ` (running ${v.yt_dlp_loaded} until the app restarts)`;
+  if (v.yt_dlp_latest) yt += v.yt_dlp_latest === v.yt_dlp ? ' — up to date' : ` — ${v.yt_dlp_latest} available`;
+  fact('yt-dlp', yt);
+  fact('spotdl', v.spotdl ? `${v.spotdl} (its yt-dlp: ${v.spotdl_yt_dlp || '—'})` : (v.spotdl_found ? 'found' : 'not installed'));
+  fact('deno', v.deno || 'not found');
+  fact('ffmpeg', v.ffmpeg ? 'found' : 'not found');
+  fact('Python', v.python);
+  renderNotifyButton();
+}
+$('btn-check-update').addEventListener('click', () => loadSystem(true));
+$('btn-update-ytdlp').addEventListener('click', async () => {
+  const out = $('update-result');
+  out.className = 'result';
+  setText(out, 'Updating… this can take a minute.');
+  $('btn-update-ytdlp').disabled = true;
+  try {
+    const r = await api('/api/system/update-ytdlp', { method: 'POST' });
+    out.className = 'result ' + (r.ok ? 'ok' : 'bad');
+    setText(out, r.ok
+      ? (r.before === r.after ? `Already on the latest (${r.after}).` : `Updated ${r.before} → ${r.after}. Restart the app to use it.`)
+      : 'Update failed: ' + r.error);
+  } catch (e) {
+    out.className = 'result bad';
+    setText(out, e.status === 409 ? 'Wait for the current download to finish first.' : e.message);
+  }
+  $('btn-update-ytdlp').disabled = false;
+  loadSystem();
+});
+$('btn-cleanup').addEventListener('click', async () => {
+  try {
+    const r = await api('/api/system/cleanup', { method: 'POST' });
+    const out = $('cleanup-result');
+    out.className = 'result ok';
+    setText(out, r.removed ? `Removed ${plural(r.removed, 'file')}, freed ${fmtBytes(r.freed_bytes)}.` : 'Nothing to clean up.');
+  } catch (e) { toast(e.message, 'bad'); }
+});
+function renderNotifyButton() {
+  const btn = $('btn-notify-permission');
+  if (!('Notification' in window)) { btn.disabled = true; setText(btn.lastChild, 'Not supported in this browser'); return; }
+  const p = Notification.permission;
+  btn.disabled = p !== 'default';
+  setText(btn.lastChild, p === 'granted' ? 'Browser notifications on' : p === 'denied' ? 'Blocked in browser settings' : 'Allow browser notifications');
+  $('btn-test-notify').disabled = !(lastStatus && lastStatus.notify_configured);
+}
+$('btn-notify-permission').addEventListener('click', async () => {
+  try { await Notification.requestPermission(); } catch (_) { /* ignore */ }
+  renderNotifyButton();
+});
+$('btn-test-notify').addEventListener('click', async () => {
+  const out = $('notify-result');
+  try {
+    const r = await api('/api/system/test-notification', { method: 'POST' });
+    out.className = 'result ' + (r.sent ? 'ok' : 'bad');
+    setText(out, r.sent ? 'Sent.' : 'Couldn’t reach NOTIFY_URL — check the server log.');
+  } catch (e) { out.className = 'result bad'; setText(out, e.message); }
+});
+
+// ── Start ───────────────────────────────────────────────────────────────
+
+loadLinks();
+selectTab(START_TAB || 'links');
+pollStatus();
+loadReportCount();
+setInterval(pollStatus, 3000);
+</script>
+</body>
+</html>
